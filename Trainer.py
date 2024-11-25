@@ -191,7 +191,7 @@ class TrainingPhase:
                 if self.loss_arg is not None:   
                     PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
                 else:
-                    PREDS, TMP_LOSS = calculate_loss(data) 
+                    PREDS, TMP_LOSS = calculate_loss(data)
             
             # Optionally update based on the loss
             if not self.conditioned_update:

@@ -441,9 +441,8 @@ class StudentTrainer(BasicTrainer):
             image_loss * self.img_weight +\
             center_loss * self.center_weight +\
             depth_loss * self.depth_weight
-
-
-        self.temp_loss = {'LOSS': loss,
+        
+        TMP_LOSS = {'LOSS': loss,
                           'LATENT': latent_loss,
                           'MU': mu_loss,
                           'LOGVAR': logvar_loss,
@@ -452,7 +451,8 @@ class StudentTrainer(BasicTrainer):
                           'CTR': center_loss,
                           'DPT': depth_loss
                           }
-        return {'R_GT': rimg,
+        
+        PREDS = {'R_GT': rimg,
                 'C_GT': cimg,
                 'T_LATENT': torch.cat((t_mu, t_logvar), -1),
                 'S_LATENT': torch.cat((s_mu, s_logvar), -1),
@@ -468,6 +468,10 @@ class StudentTrainer(BasicTrainer):
                 'T_DPT': t_depth,
                 'TAG': data['tag'],
                 'IND': data['ind']}
+        
+        self.temp_loss = TMP_LOSS
+        
+        return PREDS, TMP_LOSS
 
     def plot_test(self, select_ind=None, select_num=8, autosave=False, **kwargs):
         figs: dict = {}
