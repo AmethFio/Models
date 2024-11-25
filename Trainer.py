@@ -188,8 +188,10 @@ class TrainingPhase:
         for i in range(self.tolerance):
             # Perform loss calculation
             with autocast():
-                PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg) if 
-                self.loss_arg is not None else calculate_loss(data)
+                if self.loss_arg is not None:   
+                    PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
+                else:
+                    PREDS, TMP_LOSS = calculate_loss(data) 
             
             # Optionally update based on the loss
             if not self.conditioned_update:
@@ -260,9 +262,10 @@ class ValidationPhase:
     def __call__(self, models, data, calculate_loss):
 
         with torch.no_grad():
-            PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg) if 
-                self.loss_arg is not None else calculate_loss(data)
-            
+            if self.loss_arg is not None:   
+                PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
+            else:
+                PREDS, TMP_LOSS = calculate_loss(data)            
         return PREDS, TMP_LOSS
     
 
