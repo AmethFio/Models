@@ -533,6 +533,7 @@ class StudentTrainer(BasicTrainer):
         
         dann_features = torch.cat((s_feature, target_feature), dim=0)
         
+        # REVERSING DEPENDS ON LAMBDA
         dann_features = GradientReversalLayer.apply(dann_features, lambda_)
     
         domain_preds = self.models['dmnde'](dann_features.to(self.device))
@@ -546,7 +547,7 @@ class StudentTrainer(BasicTrainer):
         
         return domain_loss, domain_acc_loss, domain_preds, domain_labels
 
-    def calculate_loss(self, data2, reverse_feature):
+    def calculate_loss(self, data2, reverse_feature=False):
         
         def outputs(data, mode='student'):
             if mode == 'student':

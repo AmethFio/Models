@@ -393,10 +393,21 @@ class DataOrganizer:
             
         else:
             # Divide train and test
-            self.train_labels, self.test_labels, self.current_test = next(self.cross_validator)
-            self.test = self.current_test
-            self.train = ['A208', 'A308T', 'B211', 'C605']
-            self.train.remove(self.current_test)
+            if self.train is None and self.test is None:
+                self.train_labels, self.test_labels, self.current_test = next(self.cross_validator)
+                self.test = self.current_test
+                self.train = ['A208', 'A308T', 'B211', 'C605']
+                self.train.remove(self.current_test)
+            else:
+                while True:
+                    train_labels, test_labels, current_test = next(self.cross_validator)
+                    if current_test == self.test:
+                        self.train_labels, self.test_labels, self.current_test = train_labels, test_labels, current_test
+                        self.test = self.current_test
+                        self.train = ['A208', 'A308T', 'B211', 'C605']
+                        self.train.remove(self.current_test)
+                        break
+
     
     def load_plan(self, path):
         with open(path, 'rb') as f:
@@ -644,6 +655,7 @@ def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batc
     #    data_organizer.regen_plan()
     data_organizer.train = train
     data_organizer.test = test
+
     data_organizer.gen_plan(subset_ratio=subset_ratio)
     source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
     data_organizer.swap_train_test()

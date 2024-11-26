@@ -301,6 +301,7 @@ class BasicTrainer:
         # 'test': test_loader}
 
         self.device = torch.device(f"cuda:{cuda}" if torch.cuda.is_available() else "cpu")
+        self.device2 = kwargs.get('device2', self.device)
         self.extra_params = ExtraParams(self.device)
             
         self.modality = modality
@@ -511,9 +512,10 @@ class BasicTrainer:
                     end = time.time()
                     end_time = datetime.fromtimestamp(end)
                     print(f"\n\033[32mEarly Stopping triggered. Saving @ epoch {epoch}...\033[0m")
-                    for model in self.train_module:
-                        torch.save(self.models[model].state_dict(),
-                                   f"{self.save_path}{self.name}_models_{model}_best.pth")
+                    for name, phase in self.training_phases.items():
+                        for model in phase.train_module:
+                            torch.save(self.models[model].state_dict(),
+                                    f"{self.save_path}{self.name}_models_{model}_best.pth")
                         
                     with open(f"{self.save_path}{self.name}_trained.txt", 'a') as logfile:
                         logfile.write(f"End time = {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -567,7 +569,7 @@ class BasicTrainer:
                             for key in EPOCH_LOSS.keys():
                                 EPOCH_LOSS[key].append(TMP_LOSS[key].item())
                     else:
-                        PREDS, TMP_LOSS = self.calculate_loss('test',data_)
+                        PREDS, TMP_LOSS = self.calculate_loss(data_)
                         
                         for key in EPOCH_LOSS.keys():
                             EPOCH_LOSS[key].append(np.average(TMP_LOSS[key].item()))
@@ -620,7 +622,7 @@ class BasicTrainer:
         
         print("All saved!")
         
-    def load(self, path, name='Student', mode='checkpoint', load_optimizer=True, gpu=None):
+    def load(self, path, name='Student', mode='checkpoint', load_optimizer=False, gpu=None):
         print(f"\033[32m=========={self.notion} {self.name} Loading==========\033[0m")
 
         # Collect all matching file paths for each model

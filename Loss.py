@@ -451,7 +451,7 @@ class MyLossCTR(MyLossLog):
         fig.suptitle(title)
         ax = plt.gca()
 
-        bar_colors = ['skyblue', 'orange', 'green', 'pink']  # Colors for each segment
+        bar_colors = ['skyblue', 'orange', 'yellowgreen', 'pink']  # Colors for each segment
         dom_pred = []
         dom_gt = []
         xtick = []
@@ -475,7 +475,7 @@ class MyLossCTR(MyLossLog):
 
         ax.scatter(list(range(self.select_num)),
                     dom_gt, 
-                    marker=(5, 1), alpha=0.8, linewidths=5, color='purple',
+                    marker=(5, 1), alpha=0.8, linewidths=5, color='red',
                     label="GT")     
             
         ax.set_xticks(list(range(self.select_num)))  # Positions
