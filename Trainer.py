@@ -675,7 +675,7 @@ class BasicTrainer:
 
     def schedule(self, autosave=True, *args, **kwargs):
         # Training, testing and saving
-        model = self.train(autosave=autosave, notion=self.notion, *args, **kwargs)
+        self.train(autosave=autosave, notion=self.notion, *args, **kwargs)
         self.plot_train_loss(autosave=autosave)
         self.test(loader='train', *args, **kwargs)
         self.plot_test(select_num=8, autosave=autosave)
@@ -683,5 +683,4 @@ class BasicTrainer:
         self.plot_test(select_num=8, autosave=autosave)
         self.losslog.save('preds', self.save_path)
         print(f'\n\033[32m{self.name} schedule Completed!\033[0m')
-        return model
 

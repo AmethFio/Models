@@ -458,7 +458,7 @@ class StudentTrainer(BasicTrainer):
         self.training_phases = {'Feature_extractor': TrainingPhase(name = 'Feature_extractor',
                                                                    train_module = Feature_extractor_train,
                                                                    eval_module = Feature_extractor_eval,
-                                                                   verbose=True,
+                                                                   verbose=False,
                                                                    loss_arg={'reverse_feature': True}
                                                                    ),
                                 'Domain_classifier': TrainingPhase(name = 'Domain_classifier',
@@ -467,7 +467,7 @@ class StudentTrainer(BasicTrainer):
                                                                    loss = 'DOM',
                                                                    tolerance=1,
                                                                    conditioned_update=True,
-                                                                   verbose=True,
+                                                                   verbose=False,
                                                                    loss_arg={'reverse_feature': False}
                                                                    )
                                 }
