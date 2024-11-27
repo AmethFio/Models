@@ -382,6 +382,8 @@ class StudentTrainer(BasicTrainer):
 
         self.early_stopping_trigger = 'target'
         
+        self.early_stopping_trigger = 'target'
+        
         self.latent_weight = 0.1
         self.img_weight = 1.
         self.center_weight = 1.
