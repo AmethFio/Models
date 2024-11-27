@@ -665,6 +665,19 @@ def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batc
     dann_valid2 = DANN_Loader2(target_valid_loader, source_valid_loader)
     dann_test_loader = DANN_Loader2(target_test_loader, source_valid_loader)
     return dann_train_loader, dann_valid1, dann_valid2, dann_test_loader, current_test
+
+
+def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2):
+    data_organizer.train = train
+    data_organizer.test = test
+
+    data_organizer.gen_plan(subset_ratio=subset_ratio)
+    source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
+    data_organizer.swap_train_test()
+    target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
+    
+    return source_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test    
+    
     
     
 
