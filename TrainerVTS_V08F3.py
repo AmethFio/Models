@@ -375,6 +375,11 @@ class StudentTrainer(BasicTrainer):
                                                             verbose=False
                                                             )}
         
+        self.valid_phases = {
+            'source': ValidationPhase(name='source', loader='valid'),
+            'target': ValidationPhase(name='target', loader='valid2')
+        }
+        
         self.latent_weight = 0.1
         self.img_weight = 1.
         self.center_weight = 1.
