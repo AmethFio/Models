@@ -5,7 +5,7 @@ import torch.nn.init as init
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from Trainer import BasicTrainer, TrainingPhase
+from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Model import *
 from Loss import MyLossLog, MyLossCTR
 
@@ -379,6 +379,8 @@ class StudentTrainer(BasicTrainer):
             'source': ValidationPhase(name='source', loader='valid'),
             'target': ValidationPhase(name='target', loader='valid2')
         }
+
+        self.early_stopping_trigger = 'target'
         
         self.latent_weight = 0.1
         self.img_weight = 1.
