@@ -3,7 +3,7 @@ import torch.nn as nn
 from torchinfo import summary
 import numpy as np
 import os
-from Trainer import BasicTrainer
+from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog
 from Model import *
 
@@ -420,6 +420,11 @@ class CompTrainer(BasicTrainer):
         self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
                            pred_terms=self.pred_terms)
+        
+        self.valid_phases = {
+            'main': ValidationPhase(name='main', loader='valid'),
+            'target': ValidationPhase(name='target', loader='valid2')
+        }
 
     def vae_loss(self, pred, gt, mu, logvar):
         recon_loss = self.image_loss(pred, gt) / pred.shape[0]
@@ -527,6 +532,19 @@ class CompStudentTrainer(BasicTrainer):
         self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
                            pred_terms=self.pred_terms)
+        
+        self.valid_phases = {
+            'main': ValidationPhase(name='main', loader='valid'),
+            'target': ValidationPhase(name='target', loader='valid2')
+        }
+        
+        self.training_phases = {
+            'main': TrainingPhase(name = 'main',
+                                  train_module = ['csien'],
+                                  eval_module = ['imgen', 'imgde'],
+                                  verbose=False
+                                  )
+        }
         
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.mse(mu_s, mu_t) / mu_s.shape[0]

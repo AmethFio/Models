@@ -182,7 +182,7 @@ class TrainingPhase:
             for key, model in models.items():
                 for name, param in model.named_parameters():
                     if param.requires_grad:
-                        print(f"{key} {name}: requires_grad={param.requires_grad}")
+                        print(f"{self.name} {key} {name}: requires_grad={param.requires_grad}")
             self.show_trainable_params = True
         
         for i in range(self.tolerance):

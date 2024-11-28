@@ -97,10 +97,10 @@ class MyDataset(Dataset):
                              'qiao': 5,
                              'zhang2': 6}
         self.env_code = {'A208': 0,
-                         'A308': 1,
+                         'A308T': 1,
                          'B211': 2,
                          'C605': 3,
-                         'A308T': 4}
+                         'A308': 4}
 
     def __getitem__(self, index):
         """
@@ -528,6 +528,49 @@ class DANN_Loader:
         self.maximum_iter = len(self.source_loader)
         self.current = -1
         
+        
+class GuidedLoader:
+    def __init__(self, source_loader, target_loader):
+        self.source_loader = source_loader
+        self.target_loader = target_loader
+        self.source_iter = iter(source_loader)
+        self.target_iter = iter(target_loader)
+        self.maximum_iter = len(source_loader)
+        self.current = -1
+        
+        self.target_guide_batch = None
+        # TRY: FIRST BATCH LEVEL, THEN SAMPLE LEVEL
+        
+    def __iter__(self):
+        return self
+        
+    def __next__(self):
+        self.current += 1
+        if self.current > self.maximum_iter:
+            # automatically reloop
+            self.reset()
+            raise StopIteration
+            
+        try:
+            source_data = next(self.source_iter)
+        except StopIteration:
+            self.source_iter = iter(self.source_loader)  # Reset the iterator
+            source_data = next(self.source_iter)         # Get the first batch again
+
+        if self.target_guide_batch is None:
+            self.target_guide_batch = next(iter(self.target_loader))
+        source_data = {key: torch.cat([source_data[key], self.target_guide_batch[key]], dim=0)
+                        for key in source_data}
+        return source_data
+
+        
+    def __len__(self):
+        return self.maximum_iter
+    
+    def reset(self):
+        self.source_iter = iter(self.source_loader)
+        self.current = -1
+        
 
 class DANN_Loader2:
     """
@@ -667,7 +710,7 @@ def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batc
     return dann_train_loader, dann_valid1, dann_valid2, dann_test_loader, current_test
 
 
-def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2):
+def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False):
     data_organizer.train = train
     data_organizer.test = test
 
@@ -676,7 +719,10 @@ def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio
     data_organizer.swap_train_test()
     target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
     
-    return source_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test    
+    if target_guide:
+        source_train_loader = GuidedLoader(source_train_loader, target_train_loader)
+    
+    return source_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test
     
     
     
