@@ -47,29 +47,29 @@ class Wi2Vi(nn.Module):
         # 56X29X18 (3x3xamp&phase)
         self.batchnorm = batchnorm
         self.Dropin = DropIn(17)
-        self.EncoderOriginal = nn.Sequential(
-            # 56x17x18
-            nn.Conv2d(18, 64, kernel_size=3, stride=1, padding=0),
-            nn.InstanceNorm2d(64),
-            nn.ReLU(),
-            # 56x15x64
-            nn.Conv2d(64, 128, kernel_size=5, stride=2, padding=1),
-            nn.InstanceNorm2d(128),
-            nn.ReLU(),
-            # 26x7x128
-            nn.Conv2d(128, 256, kernel_size=5, stride=2, padding=1),
-            nn.InstanceNorm2d(256),
-            nn.ReLU(),
-            # 12x3x256
-            nn.Conv2d(256, 512, kernel_size=5, stride=2, padding=1),
-            nn.InstanceNorm2d(512),
-            nn.ReLU(),
-            # 5x1x512
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.InstanceNorm2d(512),
-            nn.ReLU(),
-            # 5x1x512
-        )
+        # self.EncoderOriginal = nn.Sequential(
+        #     # 56x17x18
+        #     nn.Conv2d(18, 64, kernel_size=3, stride=1, padding=0),
+        #     nn.InstanceNorm2d(64),
+        #     nn.ReLU(),
+        #     # 56x15x64
+        #     nn.Conv2d(64, 128, kernel_size=5, stride=2, padding=1),
+        #     nn.InstanceNorm2d(128),
+        #     nn.ReLU(),
+        #     # 26x7x128
+        #     nn.Conv2d(128, 256, kernel_size=5, stride=2, padding=1),
+        #     nn.InstanceNorm2d(256),
+        #     nn.ReLU(),
+        #     # 12x3x256
+        #     nn.Conv2d(256, 512, kernel_size=5, stride=2, padding=1),
+        #     nn.InstanceNorm2d(512),
+        #     nn.ReLU(),
+        #     # 5x1x512
+        #     nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
+        #     nn.InstanceNorm2d(512),
+        #     nn.ReLU(),
+        #     # 5x1x512
+        # )
 
         self.Encoder = nn.Sequential(
             # 30x17x6
@@ -417,6 +417,8 @@ class CompTrainer(BasicTrainer):
         self.loss_terms = {'LOSS'}
         self.pred_terms = ('R_GT', 'R_PRED', 'TAG', 'IND') if mode == 'wi2vi' else ('R_GT', 'R_PRED', 'LAT', 'TAG', 'IND')
 
+        self.models = {key: value.to(self.device) for key, value in model.items()}
+
         self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
                            pred_terms=self.pred_terms)
@@ -439,64 +441,70 @@ class CompTrainer(BasicTrainer):
             output = self.models['wi2vi'](data['csi'])
             loss = self.image_loss(output, img) / output.shape[0]
             self.temp_loss = {'LOSS': loss}
-            return {'R_GT': img,
+            PREDS = {'R_GT': img,
                     'R_PRED': output,
                     'TAG': data['tag'],
                     'IND': data['ind']}
+            TMP_LOSS = {'LOSS': loss}
 
         elif self.mode == 'ae':
             latent, output = self.models['ae'](data['csi'])
             loss = self.image_loss(output, img) / output.shape[0]
             self.temp_loss = {'LOSS': loss}
-            return {'R_GT': img,
+            PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': latent,
                     'TAG': data['tag'],
                     'IND': data['ind']}
+            TMP_LOSS = {'LOSS': loss}
 
         elif self.mode == 'vae':
             z, mu, logvar = self.models['csien'](data['csi'])
             output = self.models['imgde'](z)
             loss, kl_loss, recon_loss = self.vae_loss(output, img, mu, logvar)
 
-            self.temp_loss = {'LOSS': loss,
+            TMP_LOSS = {'LOSS': loss,
                               'KL': kl_loss,
                               'RECON': recon_loss
                               }
-            return {'R_GT': img,
+            PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': torch.cat((mu, logvar), -1),
                     'TAG': data['tag'],
                     'IND': data['ind']
                     }
+            self.temp_loss = TMP_LOSS
 
         elif self.mode == 'ae_t':
             z = self.models['imgen'](img)
             output = self.models['imgde'](z)
             loss = self.image_loss(output, img) / output.shape[0]
             self.temp_loss = {'LOSS': loss}
-            return {'R_GT': img,
+            PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': z,
                     'TAG': data['tag'],
                     'IND': data['ind']}
+            TMP_LOSS = {'LOSS': loss}
         
         elif self.mode == 'vae_t':
             z, mu, logvar = self.models['imgen'](img)
             output = self.models['imgde'](z)
             loss, kl_loss, recon_loss = self.vae_loss(output, img, mu, logvar)
 
-            self.temp_loss = {'LOSS': loss,
+            TMP_LOSS = {'LOSS': loss,
                             'KL': kl_loss,
                             'RECON': recon_loss
                             }
-            return {'R_GT': img,
+            PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': torch.cat((mu, logvar), -1),
                     'TAG': data['tag'],
                     'IND': data['ind']
                     }
+            self.temp_loss = TMP_LOSS
 
+        return PREDS, TMP_LOSS
 
     def plot_test(self, select_ind=None, select_num=8, autosave=False, notion='', **kwargs):
         figs: dict = {}
