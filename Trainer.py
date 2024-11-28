@@ -275,7 +275,7 @@ class BasicTrainer:
                  epochs, cuda,
                  dataloaders,
                  loss_optimizer: dict,
-                 networks = None,
+                 models = None,
                  preprocess = None,
                  modality = {'csi', 'rimg', 'tag', 'ind'},
                  train_module = 'all',
@@ -300,6 +300,7 @@ class BasicTrainer:
         # 'valid': valid_loader,
         # 'test': test_loader}
 
+        self.models = models
         self.device = torch.device(f"cuda:{cuda}" if torch.cuda.is_available() else "cpu")
         self.device2 = kwargs.get('device2', self.device)
         self.extra_params = ExtraParams(self.device)
