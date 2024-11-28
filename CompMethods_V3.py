@@ -417,7 +417,7 @@ class CompTrainer(BasicTrainer):
         self.loss_terms = {'LOSS'}
         self.pred_terms = ('R_GT', 'R_PRED', 'TAG', 'IND') if mode == 'wi2vi' else ('R_GT', 'R_PRED', 'LAT', 'TAG', 'IND')
 
-        self.models = {key: value.to(self.device) for key, value in model.items()}
+        self.models = {key: value.to(self.device) for key, value in self.models.items()}
 
         self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
