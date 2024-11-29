@@ -6,12 +6,13 @@ import os
 import pandas as pd
 from tqdm.notebook import tqdm
 
+from joblib import Parallel, delayed
 cp_flag = False
 if torch.cuda.is_available():
-
     import cupy as cp
     import cupyx.scipy.ndimage as cnd
     import cupyx.scipy.signal as cps
+    from cupy.cuda import Device
     cp_flag = True
 else:
     from scipy import signal
@@ -47,6 +48,7 @@ class Tester:
         self.name = name
         self.trainer = trainer
         self.preds = None
+        self.results = None
         self.total_length = total_length  # lenth of total matched labels of data organizer
         self.save_path = save_path
         
@@ -139,8 +141,9 @@ class ResultCalculator(Tester):
         small_gt = np.array(small_gt).astype(float)
     
         if cp_flag:
-            tmp = cps.correlate2d(cp.array(small_gt), cp.array(small_im), mode='full')
-            tmp = cp.asnumpy(tmp)
+            with Device(cuda):
+                tmp = cps.correlate2d(cp.array(small_gt), cp.array(small_im), mode='full')
+                tmp = cp.asnumpy(tmp)
         else:
             tmp = signal.correlate2d(small_gt, small_im, mode='full')
         
@@ -160,7 +163,6 @@ class ResultCalculator(Tester):
         distance = np.sqrt(dx ** 2 + dy ** 2)
 
         return {
-            'matched': im_re,
             'average_depth_mse': average_depth,
             'est_depth': im_depth,
             'gt_depth': gt_depth,
@@ -183,24 +185,29 @@ class ResultCalculator(Tester):
         return e
         
     def evaluate(self, scale=0.2, cuda=0, find_center=False):
-        self.results = pd.DataFrame(index=list(range(self.total_length)), columns=criteria)
-        
-        for i, gt, pred, *_ in tqdm(self.preds.itertuples(), desc="Evaluating", total=len(self.preds)):
-            
+        def process_row(i, gt, pred, scale, cuda):
+            # Calculate losses
             mse = self.mse_loss(pred, gt)
             soft_iou = self.iou_loss(pred, gt)
             hist_mse = self.histogram_matching_loss(pred, gt)
             matched_res = self.matched_loss(pred, gt, scale, cuda)
-            
-            for key, res in matched_res.items():
-                if key != 'matched':
-                    self.results.loc[i, key] = res
-            self.results.loc[i, ['mse', 'soft_iou', 'hist_mse']] = mse, soft_iou, hist_mse
-            
-            # self.results.loc[i,'hist_mse'] = hist_mse
-            #self.preds.loc[i, 'matched'] = matched_res['matched']
 
-            
+            # Prepare the result dictionary
+            result = {'index': i, 'mse': mse, 'soft_iou': soft_iou, 'hist_mse': hist_mse}
+            result.update(matched_res)
+            return result
+        
+        self.results = pd.DataFrame(index=list(range(self.total_length)), columns=criteria)
+        
+        results = Parallel(n_jobs=-1, backend='threading')(
+            delayed(process_row)(i, gt, pred, scale, cuda)
+            for i, gt, pred, *_ in tqdm(self.preds.itertuples(), desc="Evaluating", total=len(self.preds))
+        )
+
+        # Store results in DataFrame
+        for res in results:
+            self.results.loc[res.pop('index')] = res
+
         self.results = self.results.dropna(how='all')
         self.results.replace(np.inf, 1, inplace=True)  # Some avg_depth may be inf
 
@@ -248,12 +255,16 @@ class ResultCalculator(Tester):
     
     
 class ResultProcess:
-    def __init__(self, subjects, labels):
+    def __init__(self, subjects, labels, cuda):
         # subject = {name: trainer}
         # labels = total_segment_labels (as in DataOrganizer)
         self.subjects = subjects
+        self.testers = {}
+        self.labels = labels
+        self.cuda = cuda
         self.selected = None
         self.table = None
+    
         self.vis_count = 0
         self.box_count = 0
         self.cdf_count = 0
@@ -263,8 +274,18 @@ class ResultProcess:
     def test(self):
         for sub, trainer in self.subjects.items():
             trainer.test()
+            tester = ResultCalculator(name=sub, 
+                trainer=trainer, 
+                total_length = len(self.labels)
+               )
+            tester.fetch_preds()
+            tester.evaluate(cuda=self.cuda)
+            self.testers[sub] = tester
+            
             
     def visualization(self, scope='all', selected=None, matched=False):
+        # TODO: REWRITE!
+        
         if selected is None:
             if self.selected is None:
                 selected = self.univ_tag.sample(n=self.nsamples)
@@ -272,7 +293,7 @@ class ResultProcess:
             else:
                 selected = self.selected
         
-        scope = list(self.subjects.keys()) if scope=='all' else scope
+        scope = list(self.testers.keys()) if scope=='all' else scope
         self.figsize = (2.5 * self.nsamples, 2.5 * (len(scope) + 1))
         fig = plot_settings(self.figsize)
         mch = ' - Matched' if matched else ''
@@ -293,7 +314,7 @@ class ResultProcess:
             
         # Show pred
         for sub, subfig in zip(scope, subfigs[1:]):
-            _sub = self.subjects[sub]
+            _sub = self.testers[sub]
 
             subfig.suptitle(f'{_sub.name}', fontweight="bold")
             axes = subfig.subplots(nrows=1, ncols=self.nsamples)
@@ -312,38 +333,39 @@ class ResultProcess:
         self.vis_count += 1
         self.figs[filename] = fig
     
-    def gathercdf(self, scope='all', item='mse'):
-        scope = list(self.subjects.keys()) if scope=='all' else scope
-        fig = plot_settings((20, 10))
+    def gathercdf(self, scope='all', item='mse', show_pdf=True):
+        scope = list(self.testers.keys()) if scope=='all' else scope
+        fig = plot_settings((20, 10)) if show_pdf else plot_settings((6, 4))
 
         filename = f"Comparison_CDF_{item.upper()}_{self.cdf_count}.jpg"
         fig.suptitle(f'Test PDF-CDF - {item.upper()}', fontweight="bold")
-       
+
+        _mmin = 1
         _mmax = 0
-        self.cdf[item] = {}
+
+        data_values = np.concatenate([self.testers[sub].results[item].values for sub in scope])
+        mmin, mmax = np.min(data_values), np.max(data_values)
+        nbins = 50 if show_pdf else 30
+        bins = np.linspace(mmin, mmax, nbins)
+        zorder_base = len(scope) + 2
         
         for i, sub in enumerate(scope):
-            mmin = [np.min(self.subjects[sub].results[item].values)]
-            mmax = [np.max(self.subjects[sub].results[item].values)]
             
-            nbins = 50
-            bins = np.linspace(np.min(mmin), np.max(mmax), nbins)
-            hist_, bin_edges = np.histogram(self.subjects[sub].results[item].values, bins)
-
+            hist_, bin_edges = np.histogram(self.testers[sub].results[item].values, bins)
             width = (bin_edges[1] - bin_edges[0]) * 0.8
-            cdf = np.cumsum(hist_ / sum(hist_))           
-            _mmax = np.max(bin_edges) if np.max(bin_edges) > _mmax else _mmax
-            self.cdf[item][sub] = cdf
-            if not self.subjects[sub].zero:
-                plt.bar(bin_edges[1:], hist_ / max(hist_), width=width, label=sub, zorder=i)
-                plt.plot(bin_edges[1:], cdf, '-*', label=sub, zorder=i + len(scope))
+            if sum(hist_) > 0:
+                cdf = np.cumsum(hist_ / sum(hist_))
             else:
-                plt.bar(bin_edges[1:], hist_ / max(hist_), width=width * 0.4, label=sub, zorder=len(scope))
-                plt.plot(bin_edges[1:], cdf, '-.', marker='o', label=sub, zorder=2 * len(scope))
+                cdf = np.zeros_like(hist_)        
+            _mmax = max(_mmax, np.max(bin_edges))
+            _mmin = min(_mmin, np.min(bin_edges))
+
+            if show_pdf:
+                plt.bar(bin_edges[1:], hist_ / max(hist_), width=width, label=sub, zorder=i)
+            plt.plot(bin_edges[1:], cdf, '-*', label=sub, zorder=i + zorder_base)
 
         ax = plt.gca()
-        ax.fill_between(np.arange(0, _mmax, 0.01), 1.02,
-                        color='white', alpha=0.5, zorder=len(scope) + 0.5)
+        ax.fill_between(np.linspace(_mmin, _mmax, 100), 1.02, color='white', alpha=0.5, zorder=zorder_base)
 
         plt.xlabel(f'Per-sample {item}')
         plt.ylabel('Frequency')
@@ -354,31 +376,40 @@ class ResultProcess:
         self.figs[filename] = fig
     
     def gatherbox(self, scope='all', item='mse'):
-        scope = list(self.subjects.keys()) if scope=='all' else scope
-        fig = plot_settings((2*(len(scope) + 1) if len(scope)>9 else 20, 10))
+        scope = list(self.testers.keys()) if scope=='all' else scope
+        width = len(scope) + 1 if len(scope) > 9 else 6
+        fig = plot_settings((width, 4))
  
         filename = f"Comparison_BoxPlot_{item.upper()}_{self.box_count}.jpg"
         fig.suptitle(f'Test Box Plot - {item.upper()}', fontweight="bold")
         
         for i, sub in enumerate(scope):
-            _sub = self.subjects[sub]
+            _sub = self.testers[sub]
             plt.boxplot(_sub.results[item].values, 
-                        labels=[sub], positions=[i+1], vert=True, showmeans=True,
-                        patch_artist=True, boxprops={'facecolor': 'lightblue'})
-        plt.setp(plt.gca().get_xticklabels(), rotation=30, horizontalalignment='right')    
-        plt.yscale('log', base=2)
+                        labels=[sub], 
+                        positions=[i], 
+                        vert=True, 
+                        showmeans=True,
+                        patch_artist=True, 
+                        boxprops={'facecolor': 'lightblue'}
+                        )
+        plt.setp(plt.gca().get_xticklabels(), 
+                 #rotation=45, 
+                 horizontalalignment='right')    
+        # plt.yscale('log', base=2)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.show()
         self.box_count += 1
         self.figs[filename] = fig
     
     def average_table(self, scope='all'):
-        scope = list(self.subjects.keys()) if scope=='all' else scope
+        scope = list(self.testers.keys()) if scope=='all' else scope
         keys = criteria
         comparison_table = pd.DataFrame(columns=keys)
                 
         for sub in scope:
             for key in keys:
-                comparison_table.loc[sub, key] = np.mean(self.subjects[sub].results[key].values)
+                comparison_table.loc[sub, key] = np.mean(self.testers[sub].results[key].values)
 
         self.table = comparison_table
         print(comparison_table)

@@ -502,7 +502,6 @@ class DANN_Loader:
             # automatically reloop
             self.reset()
             raise StopIteration
-
             
         try:
             source_data = next(self.source_iter)
@@ -530,16 +529,17 @@ class DANN_Loader:
         
         
 class GuidedLoader:
-    def __init__(self, source_loader, target_loader):
+    def __init__(self, source_loader, target_loader, target_guide_num=1):
         self.source_loader = source_loader
         self.target_loader = target_loader
         self.source_iter = iter(source_loader)
         self.target_iter = iter(target_loader)
         self.maximum_iter = len(source_loader)
+        self.target_guide_num = target_guide_num
         self.current = -1
-        
-        self.target_guide_batch = None
-        # TRY: FIRST BATCH LEVEL, THEN SAMPLE LEVEL
+
+        self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
+        self.guide_iter = iter(self.guide_batch)
         
     def __iter__(self):
         return self
@@ -557,9 +557,15 @@ class GuidedLoader:
             self.source_iter = iter(self.source_loader)  # Reset the iterator
             source_data = next(self.source_iter)         # Get the first batch again
 
-        if self.target_guide_batch is None:
-            self.target_guide_batch = next(iter(self.target_loader))
-        source_data = {key: torch.cat([source_data[key], self.target_guide_batch[key]], dim=0)
+
+        # ITERATE OVER TARGET GUIDE BATCHES, YIELD ONE
+        try:
+            target_guide = next(self.guide_iter)
+        except StopIteration:
+            self.guide_iter = iter(self.guide_batch)  # Reset the iterator
+            target_guide = next(self.guide_iter)         # Get the first batch again
+        
+        source_data = {key: torch.cat([source_data[key], target_guide[key]], dim=0)
                         for key in source_data}
         return source_data
 
@@ -569,6 +575,7 @@ class GuidedLoader:
     
     def reset(self):
         self.source_iter = iter(self.source_loader)
+        
         self.current = -1
         
 
@@ -577,7 +584,7 @@ class DANN_Loader2:
     Generates source smaples and target samples by 3:1.
     """
     
-    def __init__(self, source_loader, target_loader, target_guide=False):
+    def __init__(self, source_loader, target_loader, target_guide=False, target_guide_num=1):
         self.source_loader = source_loader
         self.target_loader = target_loader
         self.source_iter = iter(self.source_loader)
@@ -587,7 +594,10 @@ class DANN_Loader2:
         
         self.target_guide_batch = None
         self.target_guide = target_guide
-        # TRY: FIRST BATCH LEVEL, THEN SAMPLE LEVEL
+        self.target_guide_num = target_guide_num
+        if target_guide:
+            self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
+            self.guide_iter = iter(self.guide_batch)
         
     def __iter__(self):
         return self
@@ -605,18 +615,23 @@ class DANN_Loader2:
             source_samples = [next(self.source_iter) for _ in range(3)]
             source_batch = {key: torch.cat([sample[key] for sample in source_samples], dim=0) 
                             for key in source_samples[0]}  # Combine into a single batch
-            
-            if self.target_guide:
-                if self.target_guide_batch is None:
-                    self.target_guide_batch = next(iter(self.target_loader))
-                source_batch = {key: torch.cat([source_batch[key], self.target_guide_batch[key]], dim=0)
-                                for key in source_batch}
 
         except StopIteration:
             self.source_iter = iter(self.source_loader)  # Reset the iterator
             source_samples = [next(self.source_iter) for _ in range(3)]
             source_batch = {key: torch.cat([sample[key] for sample in source_samples], dim=0) 
                             for key in source_samples[0]}  # Get the first batch again
+            
+        if self.target_guide:
+            # ITERATE OVER TARGET GUIDE BATCHES, YIELD ONE
+            try:
+                target_guide = next(self.guide_iter)
+            except StopIteration:
+                self.guide_iter = iter(self.guide_batch)  # Reset the iterator
+                target_guide = next(self.guide_iter)         # Get the first batch again
+            
+            source_batch = {key: torch.cat([source_batch[key], target_guide[key]], dim=0)
+                            for key in source_batch}
 
         try:
             target_data = next(self.target_iter)
@@ -635,6 +650,9 @@ class DANN_Loader2:
         self.target_iter = iter(self.target_loader)
         self.maximum_iter = len(self.source_loader) // 3
         self.current = -1
+        if self.target_guide:
+            self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
+            self.guide_iter = iter(self.guide_batch)
         
     
 class DataOrganizerDANN(DataOrganizer):
@@ -693,7 +711,7 @@ class DataOrganizerDANN(DataOrganizer):
         return train_loader, valid_loader, test_loader, self.current_test
     
     
-def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False):
+def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
     #if data_organizer.cross_validator and isinstance(data_organizer.cross_validator, CrossValidator):
     #    data_organizer.regen_plan()
     data_organizer.train = train
@@ -703,14 +721,14 @@ def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batc
     source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
     data_organizer.swap_train_test()
     target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
-    dann_train_loader = DANN_Loader2(source_train_loader, target_train_loader, target_guide)
+    dann_train_loader = DANN_Loader2(source_train_loader, target_train_loader, target_guide, target_guide_num)
     dann_valid1 = DANN_Loader2(source_valid_loader, target_valid_loader)
     dann_valid2 = DANN_Loader2(target_valid_loader, source_valid_loader)
     dann_test_loader = DANN_Loader2(target_test_loader, source_valid_loader)
     return dann_train_loader, dann_valid1, dann_valid2, dann_test_loader, current_test
 
 
-def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False):
+def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
     data_organizer.train = train
     data_organizer.test = test
 
@@ -720,7 +738,7 @@ def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio
     target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
     
     if target_guide:
-        source_train_loader = GuidedLoader(source_train_loader, target_train_loader)
+        source_train_loader = GuidedLoader(source_train_loader, target_train_loader, target_guide_num)
     
     return source_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test
     
