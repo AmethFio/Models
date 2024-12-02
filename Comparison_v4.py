@@ -381,7 +381,7 @@ class ResultProcess:
         fig = plot_settings((width, 4))
  
         filename = f"Comparison_BoxPlot_{item.upper()}_{self.box_count}.jpg"
-        fig.suptitle(f'Test Box Plot - {item.upper()}', fontweight="bold")
+        # fig.suptitle(f'Impact of Guide Data Amount', fontweight="bold")
         
         for i, sub in enumerate(scope):
             _sub = self.testers[sub]
@@ -398,6 +398,10 @@ class ResultProcess:
                  horizontalalignment='right')    
         # plt.yscale('log', base=2)
         plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.xticks(fontsize=14)
+        plt.yticks(fontsize=14)
+        plt.xlabel("Method Variations", fontsize=14)
+        plt.ylabel(item, fontsize=14)
         plt.show()
         self.box_count += 1
         self.figs[filename] = fig

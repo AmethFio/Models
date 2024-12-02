@@ -407,6 +407,42 @@ class DataOrganizer:
                         self.train = ['A208', 'A308T', 'B211', 'C605']
                         self.train.remove(self.current_test)
                         break
+                    
+    def gen_same_amount_plan(self, path, subset_ratio=0.1561):
+        with open(path, 'rb') as f:
+            plan = pickle.load(f)
+        cross_validator = iter(plan)
+        print(f'\033[32mData Organizer: Loaded plan!\033[0m')
+        t_labels = {}
+        # PRESERVE TEST
+        for i in range(4):
+            train_labels, test_labels, current_test = next(cross_validator)
+            t_labels[current_test] = test_labels
+            self.total_segment_labels.drop(test_labels.index, inplace=True)
+            print(len(self.total_segment_labels), len(test_labels))
+        
+        cross_validator = CrossValidator(self.total_segment_labels, 'env', None, None, subset_ratio)
+                
+        new_plan = []
+        
+        # REGENERATE TRAIN
+        for c_test in t_labels.keys():
+            train_labels = self.total_segment_labels[self.total_segment_labels['env']==c_test]
+            train_subset_size = int(len(train_labels) * subset_ratio)
+            
+            print(f" {c_test} Train len = {train_subset_size} from {len(train_labels)}\n"
+                  )
+
+            train_subset_indices = torch.randperm(len(train_labels))[:train_subset_size]
+            train_labels = train_labels.iloc[train_subset_indices]
+            
+            new_plan.append([train_labels, t_labels[c_test], c_test])
+
+
+        with open(f'../dataset/Door_EXP/single_env_same_amount.pkl', 'wb') as f:
+            pickle.dump(new_plan, f)
+                
+            print('Plan saved!')
 
     
     def load_plan(self, path):

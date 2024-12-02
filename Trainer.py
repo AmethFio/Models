@@ -518,10 +518,16 @@ class BasicTrainer:
                             torch.save(self.models[model].state_dict(),
                                     f"{self.save_path}{self.name}_models_{model}_best.pth")
                         
-                    with open(f"{self.save_path}{self.name}_trained.txt", 'a') as logfile:
-                        logfile.write(f"End time = {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                                      f"Total training time = {str(timedelta(seconds=end-start))}\n"
-                                      f"\nModules:\n{list(self.models.values())}\n")
+                    with open(f"{self.save_path}{self.name}_trained.txt", 'w') as logfile:
+                        logfile.write(f"{self.notion}_{self.name}\n"
+                                    f"Start time = {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                                    f"Total epochs = {self.current_ep()}\n"
+                                    f"Best val_loss = {phase.best_val_loss} @ epoch {phase.best_vloss_ep}\n"
+                                    f"Final validation losses:\n"
+                                    f"{' '.join([key + ': ' + str(TMP_LOSS[key].item()) for key in self.loss_terms])}\n"
+                                    f"End time = {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                                    f"Total training time = {str(timedelta(seconds=end-start))}\n"
+                                    f"\nModules:\n{list(self.models.values())}\n")
                     break
 
 
