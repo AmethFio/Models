@@ -228,6 +228,8 @@ class DataOrganizer:
                     self.data[modality] = {}
                     
                 if modality in ('rimg', 'rgbimg', 'cimg'):
+                    max_value = 1.
+                    
                     if d.dtype == np.uint8:
                         max_value = 255
                     elif d.dtype == np.uint16:

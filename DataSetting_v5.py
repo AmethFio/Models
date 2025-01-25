@@ -271,6 +271,7 @@ class Preprocess:
             data['rimg'] = self.transform(data['rimg'])
 
         if 'csi' in modalities:
+            # Not needed for saved pd
             if self.filter_pd:
                 # Filter and reshape CSI, calculate phasediff
                 # batch * packet * sub * rx

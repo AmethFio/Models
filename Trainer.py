@@ -113,7 +113,9 @@ class TrainingPhase:
                  tolerance=1,
                  conditioned_update=False,
                  verbose=False,
-                 loss_arg=None):
+                 loss_arg=None,
+                 *args,
+                 **kwargs):
         
         self.name = name
         self.loss = loss
@@ -144,6 +146,7 @@ class TrainingPhase:
         self.TMP_LOSS = None
         
         self.loss_arg = loss_arg
+        self.kwargs = kwargs
     
     def __call__(self, flag, models, data, calculate_loss):
         
@@ -171,7 +174,8 @@ class TrainingPhase:
         if flag:
             # SET TRAINABLE PARAMS & LEARNING RATE
             if not self.optimizer:
-                self.optimizer = self.optimizer_def(self.set_params(models), self.lr)
+                self.optimizer = self.optimizer_def(self.set_params(models), self.lr, 
+                                                    amsgrad=self.kwargs.get('amsgrad', False))
             else:
                 _ = self.set_params(models)
             

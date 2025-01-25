@@ -43,34 +43,24 @@ EPS = 1e-8
 # set numpy seed
 np.random.seed(0)
 
-def encode_time(x, L, window_size):
-    window_size *= 3
-    frequencies = np.array([2**i for i in range(L)])
-    x = x/window_size
-    pos_enc = np.concatenate([np.sin(frequencies[:, None] * np.pi * x),
-                              np.cos(frequencies[:, None] * np.pi * x)], axis=0)
-    return pos_enc
-
-
 class Preprocess:
-    def __init__(self, new_size=(128, 128), filter_pd=False):
+    def __init__(self, new_size=(128, 128)):
         self.new_size = new_size
         self.batch_size = 32
 
     def transform(self, tensor):
-        return F.interpolate(tensor, size=self.new_size, mode='bilinear', align_corners=False)
-
-    def calc_svd(self, csi):
-        first_columns_of_V = []
-        # 32 * 30 * 3 * 3 -> (32 * 30) * 3 * 3
-        csi = csi.reshape(-1, 3, 3)
-        for i in range(csi.shape[0]):
-            U, S, Vh = torch.linalg.svd(csi, full_matrices=False)
-            first_column_of_V = Vh.conj().T[:, 0]  # First column of V
-            first_columns_of_V.append(torch.abs(first_column_of_V))
-
-        first_columns_of_V = torch.stack(first_columns_of_V).reshape(self.batch_size, 150)
-        return first_columns_of_V
+        ten =  F.interpolate(tensor, size=self.new_size, mode='bilinear', align_corners=False)
+        # No need to normalize because the depth images are already [0, 1]
+        return ten
+    
+    @staticmethod
+    def encode_time(x, L=10, window_size=151):
+        window_size *= 3
+        frequencies = np.array([2**i for i in range(L)])
+        x = x / window_size
+        pos_enc = np.concatenate([torch.sin(frequencies[:, None] * torch.pi * x),
+                                torch.cos(frequencies[:, None] * torch.pi * x)], axis=0)
+        return pos_enc
     
     def __call__(self, data, modalities):
         """
@@ -82,7 +72,10 @@ class Preprocess:
             data['rimg'] = self.transform(data['rimg'])
 
         if 'csi' in modalities:
-            data['csi'] = self.calc_svd(data['csi'])
+            data['csi'] = torch.abs(data['csi']) # 3 Rx
+            
+        if 'csitime' in modalities:
+            data['csitime'] = self.encode_time(data['csitime'])
 
         return data
 
@@ -105,7 +98,7 @@ class ImageVAE(nn.Module):
 
     def __init__(self,
                  in_channels = 1,
-                 time_input_dim = 10,
+                 time_input_dim = 20,
                  z_dim = 128,
                  hidden_dims: [int] = None,
                  beta: int = 4,
@@ -206,7 +199,7 @@ class ImageVAE(nn.Module):
 class CSIVAE(nn.Module):
     def __init__(self,
                  feature_input_dim = 151 * 3,
-                 time_input_dim = 10,
+                 time_input_dim = 20,
                  sequence_length = 151,
                  z_dim = 128,
                  aggregation_method: str='concat'):
@@ -287,31 +280,7 @@ class CSIVAE(nn.Module):
         mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar
-
     
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-        """
-        # x (batch_size, seq_len, emded_dim)
-        x = x.permute(1,0,2)
-        x = x + self.pe[:x.size(0)]
-        x = x.permute(1,0,2)
-        return self.dropout(x)
 
 class MoPoEVAE(nn.Module):
     r"""
@@ -339,15 +308,15 @@ class MoPoEVAE(nn.Module):
 
     def __init__(
         self,
-        imgMean,
-        imgStd,
+        imgMean=0,
+        imgStd=1,
         weight_ll=False,
         sequence_length=151,
         z_dim=128,
         frequence_L=10,
         aggregate_method='concat',
         log=None,
-
+        training=True
     ):
         super(MoPoEVAE, self).__init__()
         self.weight_ll = weight_ll
@@ -361,7 +330,7 @@ class MoPoEVAE(nn.Module):
         self.logImage = log
         self.imgMean = torch.tensor(imgMean.reshape(1, 1, 1, 1)).to(self.device)
         self.imgStd = torch.tensor(imgStd.reshape(1, 1, 1, 1)).to(self.device)
-        self.positionalencoding = PositionalEncoding(d_model=151)
+        self.training = training
 
         if self.weight_ll:
             self.ll_weighting = 1/2

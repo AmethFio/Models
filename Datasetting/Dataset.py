@@ -122,36 +122,6 @@ class MyDataset(Dataset):
         self.env_code = env_code
                 
         self.simple_mode = simple_mode
-        
-    def get_item_simple(self, index):
-        ret: dict = {}
-        tag =  self.label.iloc[index][['env', 'subject', 'img_inds']]
-        tag['env'] = self.env_code[tag['env']]
-        tag['subject'] = self.subject_code[tag['subject']]
-        ret['tag'] = tag.to_numpy().astype(int)
-        
-        for modality, value in self.data.items():
-            if modality in ('rimg', 'cimg', 'bbx', 'ctr', 'dpt'):
-                ret[modality] = np.copy(value[img_ind])
-
-            elif modality == 'csi':
-                ret['csi'] = np.copy(value[csi_ind])
-                    
-                if self.mask_csi:
-                    ret['csi'] = self.random_mask_csi(ret['csi'])
-                    
-            elif modality == 'csitime':
-                ret['csitime'] = np.copy(value[csi_ind])
-                
-            elif modality == 'pd':
-                if not self.single_pd and self.alignment == 'head':
-                    pd_ind = np.arange(pd_ind, pd_ind + self.csi_len, dtype=int) 
-                elif not self.single_pd and self.alignment == 'tail':
-                    pd_ind = np.arange(pd_ind - self.csi_len, pd_ind, dtype=int)
-                        
-                ret['pd'] = np.copy(value[pd_ind])
-                
-        return ret
 
     def __getitem__(self, index):
         """
@@ -189,16 +159,17 @@ class MyDataset(Dataset):
                     ret[modality] = ret[modality][..., -1]
 
 
-            elif modality == 'csi':
+            elif modality in ('csi', 'csitime', 'csi2image'):
 
                 if self.alignment == 'head':
                     csi_ind = np.arange(csi_ind, csi_ind + self.csi_len, dtype=int) 
                 elif self.alignment == 'tail':
                     csi_ind = np.arange(csi_ind - self.csi_len, csi_ind, dtype=int)
-                elif self.alignment == 'single':
-                    pass
+                elif self.alignment == 'middle':
+                    csi_ind = np.arange(csi_ind - self.csi_len // 2, 
+                                        csi_ind - self.csi_len // 2 + self.csi_len, dtype=int)
 
-                ret['csi'] = np.copy(value[csi][csi_ind]) # Assume csi is n * 30 * 3
+                ret[modality] = np.copy(value[csi][csi_ind])
                     
                 if self.mask_csi:
                     ret['csi'] = self.random_mask_csi(ret['csi'])
@@ -209,7 +180,7 @@ class MyDataset(Dataset):
                 elif not self.single_pd and self.alignment == 'tail':
                     pd_ind = np.arange(pd_ind - self.csi_len, pd_ind, dtype=int)
                     
-                ret['pd'] = np.copy(value[csi][pd_ind])
+                ret[modality] = np.copy(value[csi][pd_ind])
 
                 
         return ret
