@@ -360,7 +360,7 @@ class BasicTrainer:
         if self.preprocess:
             data = self.preprocess(data, self.modality)
 
-        data = {key: value.to(torch.float32).to(self.device) for key, value in data.items()}
+        data = {key: data[key].to(torch.float32).to(self.device) for key in self.modality if key in data}
         if 'tag' in data:
             data['tag'] = data['tag'].to(torch.int32).to(self.device)
             

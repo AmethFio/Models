@@ -12,7 +12,7 @@ def timer(func):
         start = time.time()
         result = func(*args, **kwargs)
         end = time.time()
-        print("\nTotal training time:", end - start, "sec")
+        print(f"{func.__name__} elapsed: {end - start} sec")
         return result
 
     return wrapper
@@ -49,12 +49,45 @@ def colors(arrays):
     c = map_vir(norm(arr))
     return c
 
-def file_finder(path, func, process_name=None):
+def file_finder(path, func, process_name=None, *args, **kwargs):
     process_name = f"{process_name}: " if process_name else ''
-    print(f"\033[32m{process_name}Loading {path}...\033[0m")
+    print(f"\033[32m{process_name}Loading {path}\033[0m")
+    res = []
     for p, _, file_lst in os.walk(path):
         for file_name in file_lst:
             file_name_, ext = os.path.splitext(file_name)
-            func(os.path.join(p, file_name), file_name_, ext)
+            # print(f"Processing {file_name}...")
+            res.append(func(os.path.join(p, file_name), file_name_, ext, *args, **kwargs))
+    return res
             
-            
+
+def file_finder_multi(path, process_name=None):
+    process_name = f"{process_name}: " if process_name else ''
+    print(f"\033[32m{process_name}Loading {path}\033[0m")
+    
+    file_tasks = []  # To collect file processing tasks
+    
+    for p, _, file_lst in os.walk(path):
+        for file_name in file_lst:
+            file_name_, ext = os.path.splitext(file_name)
+            file_tasks.append((os.path.join(p, file_name), file_name_, ext))
+    
+    return file_tasks
+
+
+def filter_vars(obj):
+    """Return a dictionary of attributes from vars(obj) excluding those starting with '_'."""
+    return {key: value for key, value in vars(obj).items() if not key.startswith('_')}
+
+
+class Raw:
+    def __init__(self, value):
+        self._value = value.copy()
+        self._value.setflags(write=False)
+        
+    # Make sure to use copy() when assigning values!
+    @property
+    def value(self):
+        ret = self._value.copy()
+        ret.setflags(write=True)
+        return ret

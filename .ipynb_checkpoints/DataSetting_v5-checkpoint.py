@@ -37,11 +37,7 @@ env_code = {
     'A308T': 1,
     'B211' : 2,
     'C605' : 3,
-    'A308' : 4,
-    'A208D1': 10,
-    'A208D2': 11,
-    'A208D3': 12,
-    'A208X': 20
+    'A308' : 4
     }
 
 MASK_CSI = False
@@ -669,14 +665,15 @@ class DataOrganizer:
             data.pop('csi')
             data.pop('pd')
 
-        elif mode == 's':
+        else:
+            # if mode == 's'
             self.train_labels = self.removal(self.train_labels)
             self.test_labels = self.removal(self.test_labels)
             
-        elif mode == 'c':
-            data = self.data.copy()
-            data.pop('pd')
-            data.pop('cimg')
+            if mode == 'c':
+                data = self.data.copy()
+                data.pop('pd')
+                data.pop('cimg')
                 
         dataset = MyDataset(data, self.train_labels, csi_len, single_pd)
         test_dataset = MyDataset(data, self.test_labels, csi_len, single_pd)

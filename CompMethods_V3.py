@@ -407,7 +407,7 @@ class CompTrainer(BasicTrainer):
                  *args, **kwargs):
         super(CompTrainer, self).__init__(*args, **kwargs)
 
-        assert mode in ('wi2vi', 'ae', 'vae', 'ae_t', 'vae_t')
+        assert mode in ('wi2vi', 'ae', 'vae', 'ae_t', 'vae_t', 'cnnlstm')
 
         self.mode = mode
         self.mask = mask
@@ -440,7 +440,7 @@ class CompTrainer(BasicTrainer):
         if self.mode == 'wi2vi':
             output = self.models['wi2vi'](data['csi'])
             loss = self.image_loss(output, img) / output.shape[0]
-            self.temp_loss = {'LOSS': loss}
+
             PREDS = {'R_GT': img,
                     'R_PRED': output,
                     'TAG': data['tag'],
@@ -450,7 +450,7 @@ class CompTrainer(BasicTrainer):
         elif self.mode == 'ae':
             latent, output = self.models['ae'](data['csi'])
             loss = self.image_loss(output, img) / output.shape[0]
-            self.temp_loss = {'LOSS': loss}
+
             PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': latent,
@@ -479,7 +479,7 @@ class CompTrainer(BasicTrainer):
             z = self.models['imgen'](img)
             output = self.models['imgde'](z)
             loss = self.image_loss(output, img) / output.shape[0]
-            self.temp_loss = {'LOSS': loss}
+
             PREDS =  {'R_GT': img,
                     'R_PRED': output,
                     'LAT': z,
@@ -502,7 +502,21 @@ class CompTrainer(BasicTrainer):
                     'TAG': data['tag'],
                     'IND': data['ind']
                     }
-            self.temp_loss = TMP_LOSS
+            
+        elif self.mode == 'cnnlstm':
+            z = self.models['csien'](csi)
+            output = self.models['imgde'](z)
+            
+            loss = self.image_loss(output, img) / output.shape[0]
+            
+            TMP_LOSS = {'LOSS': loss
+                        }
+            PREDS =  {'R_GT': img,
+                    'R_PRED': output,
+                    'LAT': z,
+                    'TAG': data['tag'],
+                    'IND': data['ind']
+                    }
 
         return PREDS, TMP_LOSS
 
@@ -513,7 +527,7 @@ class CompTrainer(BasicTrainer):
         figs.update(self.losslog.plot_predict(plot_terms=('R_GT', 'R_PRED')))
         figs.update(self.losslog.plot_test(plot_terms='all'))
         figs.update(self.losslog.plot_test_cdf(plot_terms='all'))
-        if self.mode in ('ae', 'vae', 'ae_t'):
+        if self.mode in ('ae', 'vae', 'ae_t', 'cnnlstm'):
             figs.update(self.losslog.plot_latent(plot_terms={'LAT'}))
             # figs.update(self.loss.plot_tsne(plot_terms=('GT', 'LAT', 'PRED')))
         # else:

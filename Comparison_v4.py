@@ -23,7 +23,9 @@ from misc import plot_settings
 from PIL import Image
 from scipy.ndimage import zoom
 
-criteria = ['mse', 'soft_iou', 'matched_iou', 'matched_iou_mask', 'matched_mae', 'matched_mae_mask', 'average_depth_mse', 'est_depth', 'gt_depth', 'hist_mse', 'distance', 'dx', 'dy']
+from skimage.metrics import structural_similarity as ssim
+
+criteria = ['mse', 'snr', 'ssim', 'soft_iou', 'matched_iou', 'matched_iou_mask', 'matched_mae', 'matched_mae_mask', 'average_depth_mse', 'est_depth', 'gt_depth', 'hist_mse', 'distance', 'dx', 'dy']
 
 
 def print_result(attribute_name='result'):
@@ -101,6 +103,13 @@ class ResultCalculator(Tester):
         iou = (intersection + smooth) / (union + smooth)
         
         return 1 - iou
+    
+    @staticmethods
+    def snr_gt(reconstructed, ground_truth):
+        signal_power = np.sum(ground_truth**2)
+        noise_power = np.sum((ground_truth - reconstructed)**2)
+        snr = 10 * np.log10(signal_power / noise_power)
+        return snr
     
     @staticmethod
     def histogram_matching_loss(pred, gt):
@@ -189,11 +198,20 @@ class ResultCalculator(Tester):
             # Calculate losses
             mse = self.mse_loss(pred, gt)
             soft_iou = self.iou_loss(pred, gt)
+            snr = self.snr_gt(pred, gt)
+            mssm = ssim(pred, gt)
             hist_mse = self.histogram_matching_loss(pred, gt)
             matched_res = self.matched_loss(pred, gt, scale, cuda)
 
             # Prepare the result dictionary
-            result = {'index': i, 'mse': mse, 'soft_iou': soft_iou, 'hist_mse': hist_mse}
+            result = {
+                'index'   : i,
+                'mse'     : mse,
+                'snr'     : snr,
+                'ssim'    : ssim,
+                'soft_iou': soft_iou,
+                'hist_mse': hist_mse
+                      }
             result.update(matched_res)
             return result
         

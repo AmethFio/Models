@@ -379,8 +379,6 @@ class StudentTrainer(BasicTrainer):
             'source': ValidationPhase(name='source', loader='valid'),
             'target': ValidationPhase(name='target', loader='valid2')
         }
-
-        self.early_stopping_trigger = 'target'
         
         self.early_stopping_trigger = 'target'
         
