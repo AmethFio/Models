@@ -287,7 +287,7 @@ class CSI2ImageTrainer(BasicTrainer):
         elif self.model._mode == 'hyb':
             
             dis_loss = self.dis_loss(ret['est'], ret['label'])
-            gen_loss = self.gen_loss(ret['re_img'], data['rimg']) / ret['re_img'].shape[0]
+            gen_loss = self.gen_loss(ret['re_img'], data['rimg'])
             loss = dis_loss + gen_loss
             
             TEMP_LOSS = {

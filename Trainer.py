@@ -269,6 +269,7 @@ class ValidationPhase:
         self.best_val_loss = float("inf")
         self.best_vloss_ep = 0
         self.loss_arg = loss_arg
+        self.num_batches = None
         
     def __call__(self, models, data, calculate_loss):
 
@@ -331,9 +332,7 @@ class BasicTrainer:
         self.early_stopping_trigger = 'main'
         
         self.train_batches = len(self.dataloader.get('train', []))
-        self.valid_batches = len(self.dataloader.get('valid', []))
         self.train_sampled_batches = None
-        self.valid_sampled_batches = None
         
         self.training_phases = {
             'main': TrainingPhase(name='main',
@@ -346,7 +345,8 @@ class BasicTrainer:
                  freeze_params=None)}
         
         self.valid_phases = {
-            'main': ValidationPhase(name='main')
+            'main': ValidationPhase(name='main'),
+            'default_test': ValidationPhase(name='test', loader='test'),
         }
         self.phase_condition = None
         
@@ -423,13 +423,13 @@ class BasicTrainer:
 
     def valid_epoch(self, VALID_LOSS, phase):
         bar_format = '{desc}{percentage:3.0f}%|{bar}|[{elapsed}<{remaining}{postfix}]'
-        with tqdm(total=self.valid_batches, bar_format=bar_format) as progress_bar:
-            progress_bar.set_description(f"{self.notion} {self.name} {phase.name} valid: ep {self.current_epoch}/{self.epochs}")
+        with tqdm(total=phase.num_batches, dynamic_ncols=True, bar_format=bar_format) as progress_bar:
+            if phase.name == 'test':
+                progress_bar.set_description(f"{self.notion} {self.name} {phase.name} test @ ep {self.current_epoch}")
+            else:
+                progress_bar.set_description(f"{self.notion} {self.name} {phase.name} valid: ep {self.current_epoch}/{self.epochs}")
                             
             for idx, data in enumerate(self.dataloader.get(phase.loader, 'valid'), 1):
-                # Randomly select samples
-                if self.valid_sampled_batches is not None and idx not in self.valid_sampled_batches:
-                    continue
                 
                 # Prepare data
                 data_ = self.data_preprocess('valid', data)
@@ -449,14 +449,21 @@ class BasicTrainer:
                 if 0 < val_loss < phase.best_val_loss:
                     phase.best_val_loss = val_loss
                     phase.best_vloss_ep = self.current_epoch
-                    
-                progress_bar.set_postfix({'batch': f"{idx}/{self.valid_batches}",
+                
+                if phase.name == 'test':
+                    progress_bar.set_postfix({'batch': f"{idx}/{len(self.dataloader[phase.loader])}",
+                                'loss': f"{TMP_LOSS[phase.best_loss].item():.4f}"})
+                else:
+                    progress_bar.set_postfix({'batch': f"{idx}/{len(self.dataloader[phase.loader])}",
                                 'loss': f"{TMP_LOSS[phase.best_loss].item():.4f}",
                                 'current best': f"{phase.best_val_loss:.4f} @ epoch {phase.best_vloss_ep}"})
+                
                 progress_bar.n = idx
                 progress_bar.refresh()
-
-        with open(f"{self.save_path}{self.name}_{phase.name}_validation.txt", 'w') as logfile:
+                
+        if phase.name != 'test':
+            
+            with open(f"{self.save_path}{self.name}_{phase.name}_validation.txt", 'w') as logfile:
                         logfile.write(f"{self.notion}_{self.name}\n"
                         f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         f"Total epochs = {self.current_epoch}\n"
@@ -516,9 +523,6 @@ class BasicTrainer:
             self.train_batches = int(self.train_batches * subsample_fraction)
             self.train_sampled_batches = np.random.choice(len(self.dataloader['train']), self.train_batches, replace=False)
             
-            self.valid_batches = int(self.valid_batches * subsample_fraction)
-            self.valid_sampled_batches = np.random.choice(len(self.dataloader['valid']), self.valid_batches, replace=False)
-            
         self.epochs = 1000 if early_stop else self.epochs
         self.early_stopping = EarlyStopping(*args, **kwargs)
         self.temp_loss = {loss: None for loss in self.loss_terms}
@@ -536,7 +540,7 @@ class BasicTrainer:
                 
             EPOCH_LOSS = {loss: [] for loss in self.loss_terms}
 
-            with tqdm(total=self.train_batches, bar_format=bar_format) as progress_bar:
+            with tqdm(total=self.train_batches, dynamic_ncols=True, bar_format=bar_format) as progress_bar:
                 self.train_epoch(epoch, EPOCH_LOSS, progress_bar)
 
             for key, value in EPOCH_LOSS.items():
@@ -552,7 +556,11 @@ class BasicTrainer:
             
             # Validate per phase
             for name, phase in self.valid_phases.items():
-                VALID_LOSS = {loss: [] for loss in self.loss_terms}    
+                
+                if name == 'default_test':
+                    continue
+
+                VALID_LOSS = {loss: [] for loss in self.loss_terms}
                 
                 self.valid_epoch(VALID_LOSS, phase)
                 
@@ -580,67 +588,42 @@ class BasicTrainer:
 
     @timer
     def test(self, single_test=False, loader: str = 'test', subsample_fraction=1, *args, **kwargs):
-
-        for model in self.models:
-            self.models[model].eval()
-
-        EPOCH_LOSS = {loss: [] for loss in self.loss_terms}
+        if 'default_test' not in self.valid_phases.keys():
+            self.valid_phases['default_test'] = ValidationPhase(name='test', loader='test'),
+        
+        # Change data loader if needed
+        self.valid_phases['default_test'].loader = loader
+        
+        # Empty loss log
         self.losslog.reset('test', 'pred', dataset=loader)
-        
-        bar_format = '{desc}{percentage:3.0f}%|{bar}|[{elapsed}<{remaining}{postfix}]'
-        self.on_test = loader
-        
-        test_sampled_batches = None
-        test_batches = len(self.dataloader[loader])
-        if subsample_fraction < 1:
-            if loader == 'test':
-                test_batches = int(test_batches * subsample_fraction)
-                test_sampled_batches = np.random.choice(len(self.dataloader[loader]), test_batches, replace=False)
-            else:
-                test_sampled_batches = self.train_sampled_batches
-        
+
         start = time.time()
         start_time = datetime.fromtimestamp(start)
-        
         print(f"\033[32m=========={start_time.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Test starting==========\033[0m")
-
-        with tqdm(total=test_batches, dynamic_ncols=True, bar_format=bar_format) as _tqdm:
-            _tqdm.set_description(f'{self.notion} {self.name} test')
             
-            for idx, data in enumerate(self.dataloader[loader], 0):
-                # Randomly select samples
-                if test_sampled_batches is not None and idx not in test_sampled_batches:
-                    continue
-                
-                data_ = self.data_preprocess('test', data)
+        # Test using default validation phase
+        TEST_LOSS = {loss: [] for loss in self.loss_terms}
+        self.valid_epoch(TEST_LOSS, self.valid_phases['default_test'])
 
-                with torch.no_grad():
-                    if single_test:
-                        for sample in range(len(list(data_.values())[0])):
-                            data_i = {key: data_[key][sample][np.newaxis, ...] for key in data_.keys()}
-                            PREDS, TMP_LOSS = self.calculate_loss(data_i)
+        self.on_test = loade
+                   
+        for key, value in TEST_LOSS.items():          
+            TEST_LOSS[key] = np.average(value)
+            
+        self.losslog('test', TEST_LOSS)
+        self.losslog('pred', PREDS)
+    
+        for key in TEST_LOSS.keys():
+            TEST_LOSS[key] = np.average(TEST_LOSS[key])
 
-                            for key in EPOCH_LOSS.keys():
-                                tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
-                                EPOCH_LOSS[key].append(np.average(tmp_loss))
-                    else:
-                        PREDS, TMP_LOSS = self.calculate_loss(data_, self.test_mode)
-                        
-                        for key in EPOCH_LOSS.keys():
-                            tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
-                            EPOCH_LOSS[key].append(np.average(tmp_loss))
-                            
-                    self.losslog('pred', PREDS)
-                        
-                _tqdm.set_postfix({'batch': f"{idx}/{test_batches}",
-                                   'loss': f"{TMP_LOSS[self.valid_phases[self.early_stopping_trigger].best_loss].item():.4f}"})
-                _tqdm.update(1)
-
-        self.losslog('test', EPOCH_LOSS)
-        for key in EPOCH_LOSS.keys():
-            EPOCH_LOSS[key] = np.average(EPOCH_LOSS[key])
-
-        print(f"\nTest finished. Average loss={EPOCH_LOSS}")
+        print(f"\nTest finished. Average loss={TEST_LOSS}")
+        
+        with open(f"{self.save_path}{self.name}_{self.valid_phases['default_test'].name}_test.txt", 'w') as logfile:
+            logfile.write(f"{self.notion}_{self.name}\n"
+            f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Final test losses:\n"
+            f"{' '.join([key + ': ' + str(np.average(value.item())) for key,value in TEST_LOSS.keys()])}\n"
+            )
 
     def plot_train_loss(self, title=None, double_y=False, plot_terms='all', autosave=False, **kwargs):
         fig = self.losslog.plot_train(title, plot_terms, double_y)
