@@ -504,10 +504,12 @@ class MyLossGAN(MyLossLog):
         ax = plt.gca()
 
         bar_colors = ['skyblue', 'orange']  # Colors for each segment
-        dom_pred = self.preds['DOM_PRED'][self.select_inds]
-        dom_gt = self.preds['DOM_GT'][self.select_inds]
+        dom_pred = np.array(self.preds['DOM_PRED'])[self.select_inds]
+        dom_gt = np.array(self.preds['DOM_GT'])[self.select_inds]
         dom_gt[dom_gt > 0.5] = 0.8
         dom_gt[dom_gt < 0.5] = 0.2 # Adjust position
+        dom_pred[dom_pred > 0.5] = 0.75
+        dom_pred[dom_pred < 0.5] = 0.25 # Adjust position
         xtick = []
 
         for j, ind in enumerate(self.select_inds):

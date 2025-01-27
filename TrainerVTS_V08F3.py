@@ -417,7 +417,7 @@ class StudentTrainer(BasicTrainer):
         loss = self.recon_lossfunc(recon_img * weight, rimg * weight)
         return loss
 
-    def calculate_loss(self, data):
+    def calculate_loss(self, data, mode):
         cimg = torch.where(data['cimg'] > 0, 1., 0.)
         rimg = data['rimg']
         s_feature, s_z, s_mu, s_logvar = self.models['csien'](csi=data['csi'], pd=data['pd'])

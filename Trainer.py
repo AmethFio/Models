@@ -1,7 +1,7 @@
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 import numpy as np
 import os
@@ -195,7 +195,7 @@ class TrainingPhase:
             
             for i in range(self.tolerance):
                 # Perform loss calculation
-                with autocast():
+                with autocast(device_type='cuda'):
                     if self.loss_arg is not None:   
                         PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
                     else:
@@ -282,7 +282,6 @@ class BasicTrainer:
     def __init__(self, name='Model', 
                  epochs=300, cuda=0,
                  dataloaders: dict = {},
-                 loss_optimizer: dict = {},
                  models = None,
                  preprocess = None,
                  modality = {'csi', 'rimg', 'tag', 'ind'},
@@ -294,8 +293,6 @@ class BasicTrainer:
         self.name = name
         self.start_ep = 1
         self.epochs = epochs
-        self.loss_optimizer = loss_optimizer
-        self.scaler = GradScaler()
 
         # Please define optimizers in this way
         # self.optimizer: dict = {'LOSS1': ['optimizer1', lr1],
@@ -351,6 +348,7 @@ class BasicTrainer:
         self.phase_condition = None
         
         self.on_test = 'train'
+        self.test_mode = None
 
         self.notion = notion
         self.save_path = f'../saved/{notion}/'
@@ -436,7 +434,8 @@ class BasicTrainer:
                 PREDS, TMP_LOSS = phase(self.models, data_, self.calculate_loss)
                 
                 for key in VALID_LOSS.keys():
-                    VALID_LOSS[key].append(TMP_LOSS[key].item())
+                    tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
+                    VALID_LOSS[key].append(tmp_loss)
                     
                 if self.current_epoch % 10 == 0 and idx == 1:
                     self.losslog.reset('pred', dataset='VALID')
@@ -449,7 +448,7 @@ class BasicTrainer:
                     phase.best_vloss_ep = self.current_epoch
                     
                 progress_bar.set_postfix({'batch': f"{idx}/{self.valid_batches}",
-                                'loss': f"{TMP_LOSS['LOSS'].item():.4f}",
+                                'loss': f"{TMP_LOSS[phase.best_loss].item():.4f}",
                                 'current best': f"{phase.best_val_loss:.4f} @ epoch {phase.best_vloss_ep}"})
                 progress_bar.n = idx
                 progress_bar.refresh()
@@ -458,9 +457,9 @@ class BasicTrainer:
                         logfile.write(f"{self.notion}_{self.name}\n"
                         f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         f"Total epochs = {self.current_epoch}\n"
-                        f"Best val_loss = {phase.best_val_loss} @ epoch {phase.best_vloss_ep}\n"
+                        f"Best val_loss {phase.best_loss} = {phase.best_val_loss} @ epoch {phase.best_vloss_ep}\n"
                         f"Final validation losses:\n"
-                        f"{' '.join([key + ': ' + str(TMP_LOSS[key].item()) for key in self.loss_terms])}\n"
+                        f"{' '.join([key + ': ' + str(TMP_LOSS[key].item()) for key in TMP_LOSS.keys()])}\n"
                         )
                         
     def final_log(self, VALID_LOSS):
@@ -471,7 +470,7 @@ class BasicTrainer:
                         f"Best val_loss for {self.early_stopping_trigger} = {self.valid_phases.get(self.early_stopping_trigger).best_val_loss}" 
                         f" @ epoch {self.valid_phases.get(self.early_stopping_trigger).best_vloss_ep}\n"
                         f"Final validation losses:\n"
-                        f"{' '.join([key + ': ' + str(VALID_LOSS[key].item()) for key in self.loss_terms])}\n"
+                        f"{' '.join([key + ': ' + str(value.item()) for key, value in VALID_LOSS.items()])}\n"
                         f"End time = {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         f"Total training time = {str(self.end_time-self.start_time)}\n"
                         f"\n\nMODULES:\n{list(self.models.values())}\n")
@@ -619,17 +618,19 @@ class BasicTrainer:
                             PREDS, TMP_LOSS = self.calculate_loss(data_i)
 
                             for key in EPOCH_LOSS.keys():
-                                EPOCH_LOSS[key].append(TMP_LOSS[key].item())
+                                tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
+                                EPOCH_LOSS[key].append(np.average(tmp_loss))
                     else:
-                        PREDS, TMP_LOSS = self.calculate_loss(data_)
+                        PREDS, TMP_LOSS = self.calculate_loss(data_, self.test_mode)
                         
                         for key in EPOCH_LOSS.keys():
-                            EPOCH_LOSS[key].append(np.average(TMP_LOSS[key].item()))
+                            tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
+                            EPOCH_LOSS[key].append(np.average(tmp_loss))
                             
                     self.losslog('pred', PREDS)
                         
                 _tqdm.set_postfix({'batch': f"{idx}/{test_batches}",
-                                   'loss': f"{TMP_LOSS['LOSS'].item():.4f}"})
+                                   'loss': f"{TMP_LOSS[self.valid_phases[self.early_stopping_trigger].best_loss].item():.4f}"})
                 _tqdm.update(1)
 
         self.losslog('test', EPOCH_LOSS)

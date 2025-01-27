@@ -30,7 +30,7 @@ import torch.nn.functional as F
 version = 'CSI2Image'
 
 class Preprocess:
-    def __init__(self, new_size=(128, 128), filter_pd=False):
+    def __init__(self, new_size=(64, 64)):
         self.new_size = new_size
         self.batch_size = 32
 
@@ -46,7 +46,7 @@ class Preprocess:
             first_column_of_V = Vh.conj().T[:, 0]  # First column of V
             first_columns_of_V.append(torch.abs(first_column_of_V))
 
-        first_columns_of_V = torch.stack(first_columns_of_V).reshape(self.batch_size, 150)
+        first_columns_of_V = torch.stack(first_columns_of_V).reshape(self.batch_size, 90)
         return first_columns_of_V
     
     def __call__(self, data, modalities):
@@ -55,24 +55,24 @@ class Preprocess:
         """
         
         #  Transform images
-        if self.new_size and 'rimg' in modalities:
-            data['rimg'] = self.transform(data['rimg'])
+        data['rimg'] = self.transform(data['rimg'])
 
-        if 'csi' in modalities:
-            data['csi'] = self.calc_svd(data['csi'])
+        # CSI: Already saved csi as csi2image
+        # if 'csi2image' in modalities:
+        #     data['csi2image'] = self.calc_svd(data['csi2image'])
 
         return data
 
 
 class Generator(nn.Module):
     
-    name = 'gener'
+    name = 'gener'  
     
     def __init__(self):
         
         super(Generator, self).__init__()
 
-        self.fc = nn.Linear(270, 65536)
+        self.fc = nn.Linear(90, 65536)
         
         block = [1024, 512, 256, 128]
         cnn = []
@@ -139,11 +139,11 @@ class Model(nn.Module):
     def __init__(self, device=None, mode='gen'):
         super(Model, self).__init__()
         
-        self.gen = Generator()
-        self.dis = Discriminator()
+        self.gener = Generator()
+        self.discr = Discriminator()
         
         if device is not None:
-            for module in ['gen', 'dis']:
+            for module in ['gener', 'discr']:
                 getattr(self, module).to(device)
                 
         self._device = device
@@ -153,18 +153,19 @@ class Model(nn.Module):
     def forward(self, data):
         
         if self._mode == 'gen':
-            re_img = self.gen(data['csi'])
+            re_img = self.gener(data['csi2image'])
             ret = {
                 're_img': re_img
             }
         
         elif self._mode == 'dis':
-            noise = torch.randn((self._batch_size, 3 * 3 * 30)).to(self._device)
-            fake_img = self.gen(noise)
+            noise = torch.randn((self._batch_size, 3 * 30)).to(self._device)
+            fake_img = self.gener(noise)
             real_img = data['rimg']
-            labels = torch.cat((torch.zeros(fake_img.shape[0], dtype=int), torch.ones(real_img.shape[0], dtype=int))).to(self._device)
-            imgs = torch.cat(torch.cat((fake_img, real_img), dim=0))
-            est = self.dis(imgs)
+            labels = torch.cat((torch.zeros((fake_img.shape[0], 1), dtype=float), 
+                torch.ones((real_img.shape[0], 1), dtype=float)), dim=0).to(self._device)
+            imgs = torch.cat((fake_img, real_img), dim=0)
+            est = self.discr(imgs)
             
             ret = {
                 'fake_img': fake_img,
@@ -173,12 +174,12 @@ class Model(nn.Module):
             }
         
         elif self._mode == 'hyb':
-            re_img = self.gen(data['csi'])
-            est = self.dis(re_img)
-            labels = torch.ones(re_img.shape[0], dtype=int).to(self._device)
+            re_img = self.gener(data['csi2image'])
+            est = self.discr(re_img)
+            labels = torch.ones((re_img.shape[0], 1), dtype=float).to(self._device)
             
             ret = {
-                'gen_img': re_img,
+                're_img': re_img,
                 'label': labels,
                 'est': est
             }
@@ -192,12 +193,13 @@ class CSI2ImageTrainer(BasicTrainer):
                  *args, **kwargs
                  ):
         
-        super(CSI2ImageTrainer, self).__init__(*args, **kwargs)
-    
-        self.modality = {'rimg', 'csi', 'timestmap', 'tag', 'ind'}
+        super(CSI2ImageTrainer, self).__init__( *args, **kwargs)
+
+        self.modality = {'rimg', 'csi2image', 'timestmap', 'tag', 'ind'},
+        self.preprocess = Preprocess()
 
         self.dis_loss = nn.BCEWithLogitsLoss()
-        self.gen_loss = nn.MSELoss(reduction='sum')
+        self.gen_loss = nn.MSELoss()
         
         self.loss_terms = ('LOSS', 'GEN', 'DIS', 'HYB', 'HYB_GEN', 'HYB_DIS')
         self.pred_terms = ('GT', 'PRED', 'FAKE', 'DOM_GT', 'DOM_PRED', 'TAG', 'IND')
@@ -207,24 +209,36 @@ class CSI2ImageTrainer(BasicTrainer):
                            pred_terms=self.pred_terms)
         
         self.model = Model(device=self.device)
-        self.models = vars(self.model)
+        self.models = {m: getattr(self.model, m) for m in ['gener', 'discr']}
         
         self.training_phases = {
             'Generator': TrainingPhase(name='Generator',
                                        train_module=['gener'],
                                        eval_module=['discr'],
-                                       verbose=False),
+                                       lr=2.e-4,
+                                       loss_arg='gen'),
             'Discriminator': TrainingPhase(name='Discriminator',
                                            train_module=['discr'],
                                            eval_module=['gener'],
-                                           verbose=False),
+                                           lr=2.e-4,
+                                           loss='DIS',
+                                           loss_arg='dis'),
             'Hybrid': TrainingPhase(name='Hybrid',
                                     train_module=['gener'],
                                     eval_module=['discr'],
-                                    verbose=False)
+                                    lr=2.e-4,
+                                    loss='HYB',
+                                    loss_arg='hyb')
         }
-        
-        self.early_stopping_trigger = 'Hybrid'
+
+        self.valid_phases = {
+            'main': ValidationPhase(name='main',
+                best_loss='HYB',
+                loss_arg='hyb'),
+        }
+
+        self.test_mode = 'hyb'
+
         
     def phase_condition(self, name, epoch):
         if name == 'Hybrid' and epoch % 8 != 0:
@@ -232,13 +246,14 @@ class CSI2ImageTrainer(BasicTrainer):
         else:
             return True
         
-    def calculate_loss(self, data):
+    def calculate_loss(self, data, mode):
         
+        self.model._mode = mode
         ret = self.model(data)
         
-        if self.model._mode == 'gen':
+        if mode == 'gen':
             
-            loss = self.gen_loss(ret['re_img'], data['rimg']) / ret['re_img'].shape[0]
+            loss = self.gen_loss(ret['re_img'], data['rimg'])
 
             TEMP_LOSS = {
                 'LOSS': loss,
@@ -254,7 +269,7 @@ class CSI2ImageTrainer(BasicTrainer):
             
         elif self.model._mode == 'dis':
             
-            loss = self.dis_loss(ret['est'], ret['labels'])
+            loss = self.dis_loss(ret['est'], ret['label'])
             
             TEMP_LOSS = {
                 'DIS': loss
@@ -283,7 +298,7 @@ class CSI2ImageTrainer(BasicTrainer):
             
             PREDS = {
                 'GT'      : data['rimg'],
-                'PRED'    : ret['gen_img'],
+                'PRED'    : ret['re_img'],
                 'DOM_GT'  : ret['label'],
                 'DOM_PRED': ret['est'],
                 'TAG'     : data['tag'],
@@ -304,7 +319,7 @@ class CSI2ImageTrainer(BasicTrainer):
             figs.update(self.losslog.plot_discriminate())
             
         elif self.model._mode == 'hyb':
-            figs.update(self.losslog.plot_predict(plot_terms=('PRED')))
+            figs.update(self.losslog.plot_predict(plot_terms=('GT', 'PRED')))
             figs.update(self.losslog.plot_discriminate())
 
         if autosave:
