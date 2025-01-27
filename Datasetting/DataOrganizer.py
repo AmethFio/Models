@@ -8,8 +8,11 @@ import numpy as np
 import pandas as pd
 from scipy import signal
 import os
+from glob import glob
+
 from PIL import Image
 import pickle
+from pandas.compat import pickle_compat
 from misc import timer, file_finder, file_finder_multi
 from joblib import Parallel, delayed
 import time
@@ -137,33 +140,32 @@ class DataOrganizer:
         
         self.removal = removal
         
-    def file_condition(self, fname, fext):
+    def file_condition(self, fname):
         ret = False
         typ = None
         modality = None
         name = None
-        
-        if fext == '.csv':
-            if 'matched' in fname and 'checkpoint' not in fname:
-                ret = True
-                typ = 'label'
 
-        elif fext == '.npy':
-            if not ('env' in fname or 'test' in fname or 'checkpoint' in fname):
-                name, modality = fname.split('-')
-                if modality in self.modalities:
-                    ret = True
-                    typ = 'data'
+        if fname[-3:] == 'csv' and 'matched' in fname and 'checkpoint' not in fname:
+            ret = True
+            typ = 'label'
+
+        if fname[-3:] == 'npy' and not ('env' in fname or 'test' in fname or 'checkpoint' in fname):
+            name, modality = fname[:-4].split('-')
+            if modality in self.modalities:
+                ret = True
+                typ = 'data'
                 
         return ret, typ, (modality, name)
                 
     @timer
     def load(self, multi=False):
         
-        def load_single(fname, fext, fpath, atm, start, etc):
+        def load_single(fname, fpath, atm, etc):
             data = None
             label = None
             loaded = False
+            start = time.time()
 
             if typ == 'data':
                 # Load CSI and IMGs <name>-<modality>.npy
@@ -171,7 +173,7 @@ class DataOrganizer:
                 data = (*etc, d) # modality, name, data
                 
                 end = time.time()
-                print(f"Loaded {fname}{fext} of {d.shape}{atm}, elapsed {(end - start):.4f} sec")
+                lg = f"Loaded {fname} of {d.shape}{atm}, elapsed {(end - start):.4f} sec"
                 loaded = True
                 
             elif typ == 'label':
@@ -179,10 +181,10 @@ class DataOrganizer:
                 label = pd.read_csv(fpath)
                 
                 end = time.time()
-                print(f"Loaded {fname}{fext} of len {len(label)}{atm}, elapsed {(end - start):.4f} sec")
+                lg = f"Loaded {fname} of len {len(label)}{atm}, elapsed {(end - start):.4f} sec"
                 loaded = True
  
-            return label, data, loaded
+            return label, data, loaded, lg
         
         def load_attempt(file_path, file_name_, ext):
             label = None
@@ -204,7 +206,7 @@ class DataOrganizer:
                     
                 else:
                     try:
-                        label, data, loaded = load_single(file_name_, ext, file_path, atm, start, etc)
+                        label, data, loaded, lg = load_single(file_name_, ext, file_path, atm, start, etc)
 
                     except Exception as e:
                         print(f"\033[31mError: {e} for {file_name_}{ext} (Attempt {attempt})\033[0m")
@@ -243,36 +245,41 @@ class DataOrganizer:
         # Main loop
         
         fail = []
+        load_logs = []
+        skip_logs = []
         
         for dpath in self.data_path:
             if multi:
-                print('Multi-process loading...')
-                files = file_finder_multi(dpath, process_name="Data Organizer")
-                results = Parallel(n_jobs=8)(
-                    delayed(load_attempt)(f, file_name_, ext) for f, file_name_, ext in files
-                )
+                pass
+                # print('Multi-process loading...')
+                # files = file_finder_multi(dpath, process_name="Data Organizer")
+                # results = Parallel(n_jobs=8)(
+                #     delayed(load_attempt)(f, file_name_, ext) for f, file_name_, ext in files
+                # )
                 
-                for label, data in results:
-                    unpack_results(label, data)
+                # for label, data in results:
+                #     unpack_results(label, data)
                         
             else:
                 print('Single-process loading...')
-                # results = file_finder(dpath, load_single, process_name="Data Organizer")
-                for p, _, file_lst in os.walk(dpath):
-                    for file_name in file_lst:
-                        file_name_, ext = os.path.splitext(file_name)
-                        loadable, typ, etc = self.file_condition(file_name_, ext)
                 
-                        if not loadable:
-                            print(f"\033[33mSkipping {file_name_}{ext}\033[0m")
-                            
-                        else:
-                            start = time.time()
-                            label, data, _ = load_single(file_name_, ext, os.path.join(p, file_name), '', start, etc)
-                            unpack_results(label, data, fail)
+                # results = file_finder(dpath, load_single, process_name="Data Organizer")
+                files = glob(f"{dpath}/**/*", recursive=True)
+                for file_path in files:
+                    file_name = os.path.basename(file_path)
+
+                    loadable, typ, etc = self.file_condition(file_name)
+                    if not loadable:
+                        skip_logs.append(f"\033[33mSkipping {file_name}\033[0m")
                     
+                    else:
+                        label, data, etc, lg = load_single(file_name, file_path, '', etc)
+                        unpack_results(label, data, fail)
+                        load_logs.append(lg)
+        
+        print("\n".join(load_logs))
         print(f"\nLoad complete!")
-        if fail is not None:
+        if len(fail) > 0:
             print(f"Failed to load: {fail}")
         # self.total_segment_labels['csi_inds'] = self.total_segment_labels['csi_inds'].apply(lambda x: list(map(int, x.strip('[]').split())))
         
@@ -300,20 +307,26 @@ class DataOrganizer:
         else:
             # Divide train and test
             current_test = None
-            train_labels, test_labels, train_range, current_test = next(self.cross_validator)
-            
+            plan = next(self.cross_validator)
+            if len(plan) == 3:
+                train_labels, test_labels, current_test = plan
+            elif len(plan) == 4:
+                train_labels, test_labels, train_range, current_test = plan
             while True:
                 if specify_test is not None and current_test != specify_test:
-                    train_labels, test_labels, train_range, current_test = next(self.cross_validator)
-                    
+                    plan = next(self.cross_validator)
+                    if len(plan) == 3:
+                        train_labels, test_labels, current_test = plan
+                    elif len(plan) == 4:
+                        train_labels, test_labels, train_range, current_test = plan
                 else:
                     break
             
-            self.train_labels, self.test_labels = train_labels, test_labels
+            self.train_labels, self.test_labels, self.current_test = train_labels, test_labels, current_test
     
     def load_plan(self, path):
         with open(path, 'rb') as f:
-            plan = pickle.load(f)
+            plan = pickle_compat.load(f)
         self.cross_validator = iter(plan)
         print(f'\033[32mData Organizer: Loaded plan!\033[0m')
     
@@ -328,7 +341,7 @@ class DataOrganizer:
                     pin_memory=True):
 
         print(f'\033[32mData Organizer: Generating loaders for {mode}: '
-              f'level = {self.cross_validator.level}, current test = {self.cross_validator.current_test}\033[0m')
+              f'current test = {self.current_test}\033[0m')
         
         data = self.data.copy()
         
@@ -385,6 +398,7 @@ class DataOrganizer:
                                         batch_size=batch_size, 
                                         num_workers=num_workers,
                                         pin_memory=pin_memory,
+                                        drop_last=True,
                                         shuffle=shuffle_test,
                                         worker_init_fn=worker_init_fn
                                     )
@@ -393,7 +407,7 @@ class DataOrganizer:
         else:
             test_loader = None
         
-        return train_loader, valid_loader, test_loader, self.cross_validator.current_test
+        return train_loader, valid_loader, test_loader, self.current_test
         
         
 class DataOrganizerEXT(DataOrganizer):

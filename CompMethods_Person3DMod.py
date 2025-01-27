@@ -4,7 +4,7 @@ from torchinfo import summary
 import numpy as np
 import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
-from Loss import MyLossGAN
+from Loss import MyLossLog
 from Model import *
 import torch.nn.functional as F
 
@@ -29,19 +29,41 @@ import torch.nn.functional as F
 
 version = 'P3DMod'
 
-import torch
-import torch.nn as nn
+class Preprocess:
+    def __init__(self, new_size=(128, 128)):
+        self.new_size = new_size
+        self.batch_size = 32
+
+    def transform(self, tensor):
+        return F.interpolate(tensor, size=self.new_size, mode='bilinear', align_corners=False)
+    
+    def __call__(self, data, modalities):
+        """
+        Preprocess after retrieving data
+        """
+        
+        #  Transform images
+        data['rimg'] = self.transform(data['rimg'])
+
+        # CSI: Extract amp and phase
+        data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=2) 
+
+        return data
 
 class SpatialTemporalEncoder(nn.Module):
-    name = 'stpen'
+    name = 'csien'
     
-    def __init__(self, num_tokens=180, embed_dims=128, num_layers=6, num_heads=8, ffn_dims=1024, dropout=0.1):
+    def __init__(self, input_dim=60, embed_dims=128, num_layers=6, num_heads=8, ffn_dims=1024, dropout=0.1):
         super(SpatialTemporalEncoder, self).__init__()
-        self.num_tokens = num_tokens
-        self.embed_dims = embed_dims
+
+        # Linear layer to project input to `embed_dims`
+        self.input_projection = nn.Linear(input_dim, embed_dims)
+
+        # Linear layer to project input to `embed_dims`
+        self.output_projection = nn.Linear(input_dim * embed_dims, embed_dims)
 
         # Spatial-Temporal Embedding (STE)
-        self.spatial_temporal_embedding = nn.Parameter(torch.randn(1, num_tokens, embed_dims))
+        self.spatial_temporal_embedding = nn.Parameter(torch.randn(1, 60, embed_dims))
 
         # Encoder Layers
         self.layers = nn.ModuleList([
@@ -66,6 +88,11 @@ class SpatialTemporalEncoder(nn.Module):
         Returns:
             Tensor: Output tensor of shape (num_tokens, batch_size, embed_dims).
         """
+        x = x.permute(0, 2, 1, 3).reshape(32, 60, -1) # batch * (2 * sub) * (pkt * rx)
+
+        # Project input to `embed_dims`
+        x = self.input_projection(x)  # Shape: (batch_size, num_tokens, embed_dims)
+
         # Add spatial-temporal embedding to input
         x = x + self.spatial_temporal_embedding
         
@@ -81,6 +108,8 @@ class SpatialTemporalEncoder(nn.Module):
 
         # Apply final layer normalization
         x = self.layer_norm(x)
+
+        x = self.output_projection(x.view(32, -1))
         return x
     
 
@@ -141,10 +170,10 @@ class ImageDecoder(nn.Module):
 
 class Person3DMod(nn.Module):
 
-    def __init__(self, device=None):
+    def __init__(self, num_layers=6, device=None):
         super(Person3DMod, self).__init__()
 
-        self.csien = SpatialTemporalEncoder(embed_dims=128)
+        self.csien = SpatialTemporalEncoder(embed_dims=128, num_layers=num_layers)
         self.imgde = ImageDecoder(latent_dim=128)
 
         if device is not None:
@@ -174,27 +203,22 @@ class P3DModTrainer(BasicTrainer):
     
         self.modality = {'rimg', 'csi', 'tag', 'ind'}
 
-        self.dis_loss = nn.BCEWithLogitsLoss()
+        self.recon_lossfunc = nn.BCEWithLogitsLoss(reduction='sum')
+        self.preprocess = Preprocess()
         
-        self.loss_terms = ('LOSS')
+        self.loss_terms = (['LOSS'])
         self.pred_terms = ('GT', 'PRED', 'TAG', 'IND')
         
-        self.losslog = MyLoss(name=self.name,
+        self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
                            pred_terms=self.pred_terms)
         
         self.training_phases = {
             'main': TrainingPhase(name='main',
-                 train_module='all',
-                 eval_module=None,
-                 loss='LOSS',
-                 lr=1.e-3,
-                 optimizer=torch.optim.Adam,
-                 scaler=GradScaler(),
-                 freeze_params=None)}
+                 lr=2.e-5)}
         
         self.model = Person3DMod(device=self.device)
-        self.models = vars(self.model)
+        self.models = {m: getattr(self.model, m) for m in ['csien', 'imgde']}
         
     def calculate_loss(self, data):
         
@@ -219,7 +243,6 @@ class P3DModTrainer(BasicTrainer):
         self.losslog.generate_indices(select_ind, select_num)
 
         figs.update(self.losslog.plot_predict(plot_terms=('GT', 'PRED')))
-        figs.update(self.losslog.plot_latent(plot_terms={'LAT'}))
 
         if autosave:
             for filename, fig in figs.items():
@@ -227,5 +250,6 @@ class P3DModTrainer(BasicTrainer):
 
 
 if __name__ == "__main__":
-
-    pass
+    from torchinfo import summary
+    m = Person3DMod()
+    summary(m, input_size=(32, 20, 30, 3))
