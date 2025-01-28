@@ -465,7 +465,7 @@ class BasicTrainer:
             with open(f"{self.save_path}{self.name}_{phase.name}_validation.txt", 'w') as logfile:
                         logfile.write(f"{self.notion}_{self.name}\n"
                         f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        f"Total epochs = {self.current_epoch}\n"
+                        f"Total epochs = {self.start_ep + self.current_epoch}\n"
                         f"Best val_loss {phase.best_loss} = {phase.best_val_loss} @ epoch {phase.best_vloss_ep}\n"
                         f"Final validation losses:\n"
                         f"{' '.join([key + ': ' + str(TMP_LOSS[key].item()) for key in TMP_LOSS.keys()])}\n"
@@ -475,7 +475,7 @@ class BasicTrainer:
         with open(f"{self.save_path}{self.name}_trained.txt", 'w') as logfile:
             logfile.write(f"{self.notion}_{self.name}\n"
                         f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        f"Total epochs = {self.current_epoch}\n"
+                        f"Total epochs = {self.start_ep + self.current_epoch}\n"
                         f"Best val_loss for {self.early_stopping_trigger} = {self.valid_phases.get(self.early_stopping_trigger).best_val_loss}" 
                         f" @ epoch {self.valid_phases.get(self.early_stopping_trigger).best_vloss_ep}\n"
                         f"Final validation losses:\n"
