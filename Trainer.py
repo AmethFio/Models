@@ -56,7 +56,7 @@ class ExtraParams:
 
 class EarlyStopping:
 
-    def __init__(self, min_epoch=200, early_stop_max=10, lr_decay_max=5, verbose=True, delta=0, *args, **kwargs):
+    def __init__(self, start_ep=0, min_epoch=100, early_stop_max=10, lr_decay_max=5, verbose=True, delta=0, *args, **kwargs):
 
         self.min_epoch = min_epoch
 
@@ -66,7 +66,7 @@ class EarlyStopping:
 
         self.verbose = verbose
         self.delta = delta
-        self.total_epochs = 0
+        self.total_epochs = start_ep
         self.best_valid_loss = np.inf
 
         self.decay_flag = False
@@ -523,7 +523,7 @@ class BasicTrainer:
             self.train_sampled_batches = np.random.choice(len(self.dataloader['train']), self.train_batches, replace=False)
             
         self.epochs = 1000 if early_stop else self.epochs
-        self.early_stopping = EarlyStopping(*args, **kwargs)
+        self.early_stopping = EarlyStopping(start_ep=self.start_ep,*args, **kwargs)
         self.temp_loss = {loss: None for loss in self.loss_terms}
         # ===============TRAIN & VALIDATE EACH EPOCH==============
         start = time.time()

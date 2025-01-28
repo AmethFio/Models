@@ -194,7 +194,7 @@ class MyLossLog:
             axes[i].grid()
             axes[i].legend()
         plt.show()
-        filename = f"{self.name}_TRAIN.jpg"
+        filename = f"{self.name}_TRAIN@ep{self.current_epoch}.jpg"
         return {filename: fig}
 
     def plot_test(self, title=None, plot_terms='all'):
