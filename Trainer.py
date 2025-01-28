@@ -438,6 +438,7 @@ class BasicTrainer:
                     
                 if phase.name == 'test':
                     self.losslog.reset('pred', dataset=phase.loader)
+                    self.losslog('pred', PREDS)
                 elif self.current_epoch % 10 == 0 and idx == 1:
                     self.losslog.reset('pred', dataset='VALID')
                     self.losslog('pred', PREDS)
