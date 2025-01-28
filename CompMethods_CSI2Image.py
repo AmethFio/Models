@@ -215,7 +215,7 @@ class CSI2ImageTrainer(BasicTrainer):
             'Generator': TrainingPhase(name='Generator',
                                        train_module=['gener'],
                                        eval_module=['discr'],
-                                       lr=2.e-4,
+                                       lr=1.e-4,
                                        loss_arg='gen'),
             'Discriminator': TrainingPhase(name='Discriminator',
                                            train_module=['discr'],

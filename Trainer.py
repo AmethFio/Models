@@ -3,8 +3,10 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 try:
     from torch.amp import autocast, GradScaler
+    _autocast_arg = {'device_type': 'cuda'}
 except ImportError:
     from torch.cuda.amp import autocast, GradScaler
+    _autocast_arg = {}
 
 import numpy as np
 import os
@@ -116,7 +118,7 @@ class TrainingPhase:
                  tolerance=1,
                  conditioned_update=False,
                  verbose=False,
-                 loss_arg=None,
+                 loss_arg={},
                  *args,
                  **kwargs):
         
@@ -198,11 +200,8 @@ class TrainingPhase:
             
             for i in range(self.tolerance):
                 # Perform loss calculation
-                with autocast(device_type='cuda'):
-                    if self.loss_arg is not None:   
-                        PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
-                    else:
-                        PREDS, TMP_LOSS = calculate_loss(data)
+                with autocast(**_autocast_arg):
+                    PREDS, TMP_LOSS = calculate_loss(data, **self.loss_arg)
                 
                 # Optionally update based on the loss
                 if not self.conditioned_update:
@@ -262,7 +261,7 @@ class TrainingPhase:
         
         
 class ValidationPhase:
-    def __init__(self, name, loader='valid', best_loss='LOSS', loss_arg=None):
+    def __init__(self, name, loader='valid', best_loss='LOSS', loss_arg={}):
         self.name = name
         self.loader = loader
         self.best_loss = best_loss
@@ -274,10 +273,7 @@ class ValidationPhase:
     def __call__(self, models, data, calculate_loss):
 
         with torch.no_grad():
-            if self.loss_arg is not None:   
-                PREDS, TMP_LOSS = calculate_loss(data, self.loss_arg)
-            else:
-                PREDS, TMP_LOSS = calculate_loss(data)            
+            PREDS, TMP_LOSS = calculate_loss(data, **self.loss_arg)      
         return PREDS, TMP_LOSS
     
 
@@ -440,7 +436,9 @@ class BasicTrainer:
                     tmp_loss = TMP_LOSS[key].item() if key in TMP_LOSS.keys() else 0
                     VALID_LOSS[key].append(tmp_loss)
                     
-                if self.current_epoch % 10 == 0 and idx == 1:
+                if phase.name == 'test':
+                    self.losslog.reset('pred', dataset=phase.loader)
+                elif self.current_epoch % 10 == 0 and idx == 1:
                     self.losslog.reset('pred', dataset='VALID')
                     self.losslog('pred', PREDS)
                     self.plot_test(autosave=False)
@@ -589,7 +587,7 @@ class BasicTrainer:
     @timer
     def test(self, single_test=False, loader: str = 'test', subsample_fraction=1, *args, **kwargs):
         if 'default_test' not in self.valid_phases.keys():
-            self.valid_phases['default_test'] = ValidationPhase(name='test', loader='test'),
+            self.valid_phases['default_test'] = ValidationPhase(name='test', loader='test')
         
         # Change data loader if needed
         self.valid_phases['default_test'].loader = loader
@@ -605,13 +603,12 @@ class BasicTrainer:
         TEST_LOSS = {loss: [] for loss in self.loss_terms}
         self.valid_epoch(TEST_LOSS, self.valid_phases['default_test'])
 
-        self.on_test = loade
+        self.on_test = loader
                    
         for key, value in TEST_LOSS.items():          
             TEST_LOSS[key] = np.average(value)
             
         self.losslog('test', TEST_LOSS)
-        self.losslog('pred', PREDS)
     
         for key in TEST_LOSS.keys():
             TEST_LOSS[key] = np.average(TEST_LOSS[key])
@@ -622,7 +619,7 @@ class BasicTrainer:
             logfile.write(f"{self.notion}_{self.name}\n"
             f"Start time = {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Final test losses:\n"
-            f"{' '.join([key + ': ' + str(np.average(value.item())) for key,value in TEST_LOSS.keys()])}\n"
+            f"{' '.join([key + ': ' + str(np.average(value.item())) for key, value in TEST_LOSS.items()])}\n"
             )
 
     def plot_train_loss(self, title=None, double_y=False, plot_terms='all', autosave=False, **kwargs):
@@ -713,7 +710,7 @@ class BasicTrainer:
     def schedule(self, autosave=True, *args, **kwargs):
         # Training, testing and saving
         self.train(autosave=autosave, notion=self.notion, *args, **kwargs)
-        self.plot_train_loss(autosave=autosave)
+        self.plot_train_loss(autosave=True)
         self.test(loader='train', *args, **kwargs)
         self.plot_test(select_num=8, autosave=autosave)
         self.test(loader='test', *args, **kwargs)

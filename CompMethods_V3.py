@@ -423,10 +423,10 @@ class CompTrainer(BasicTrainer):
                            loss_terms=self.loss_terms,
                            pred_terms=self.pred_terms)
         
-        self.valid_phases = {
-            'main': ValidationPhase(name='main', loader='valid'),
-            'target': ValidationPhase(name='target', loader='valid2')
-        }
+        # self.valid_phases = {
+        #     'main': ValidationPhase(name='main', loader='valid'),
+        #     'target': ValidationPhase(name='target', loader='valid2')
+        # }
 
     def vae_loss(self, pred, gt, mu, logvar):
         recon_loss = self.image_loss(pred, gt) / pred.shape[0]
