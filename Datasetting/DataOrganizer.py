@@ -111,7 +111,6 @@ class CrossValidator:
         pass
     
     def reset(self):
-        self.iter_range()
         self.current = -1
         self.current_test = None
 

@@ -216,25 +216,29 @@ class CSI2ImageTrainer(BasicTrainer):
                                        train_module=['gener'],
                                        eval_module=['discr'],
                                        lr=1.e-4,
-                                       loss_arg='gen'),
+                                       loss_arg={'mode': 'gen'}),
             'Discriminator': TrainingPhase(name='Discriminator',
                                            train_module=['discr'],
                                            eval_module=['gener'],
                                            lr=2.e-4,
                                            loss='DIS',
-                                           loss_arg='dis'),
+                                           loss_arg={'mode': 'dis'}),
             'Hybrid': TrainingPhase(name='Hybrid',
                                     train_module=['gener'],
                                     eval_module=['discr'],
                                     lr=2.e-4,
                                     loss='HYB',
-                                    loss_arg='hyb')
+                                    loss_arg={'mode': 'hyb'})
         }
 
         self.valid_phases = {
             'main': ValidationPhase(name='main',
                 best_loss='HYB',
-                loss_arg='hyb'),
+                loss_arg={'mode': 'hyb'}),
+
+            'default_test': ValidationPhase(name='test',
+                best_loss='GEN',
+                loss_arg={'mode': 'gen'}),
         }
 
         self.test_mode = 'hyb'
