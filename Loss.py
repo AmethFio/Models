@@ -124,11 +124,11 @@ class MyLossLog:
             for key, value in self.preds.items():
                 #if 'GT' in key:
                 #    continue
-                print(f"Saving {save_term}: {key}...")
+                print(f"Saving {save_term}: {key} of len {len(value)}...")
                 np.save(f"{save_path}{self.name}_{save_term}_{key}.npy", value)
         else:
             for key, value in self.loss.items():
-                print(f"Saving {save_term}: {key}...")
+                print(f"Saving {save_term}: {key} of len {len(value)}...")
                 np.save(f"{save_path}{self.name}_{save_term}_{key}.npy", value.log[save_term])
         print('All saved!')
 
