@@ -17,6 +17,7 @@ from misc import timer, file_finder, file_finder_multi
 from joblib import Parallel, delayed
 import time
 from Datasetting.Dataset import *
+from Datasetting.DatasetMoPoEVAE import MyDataset as MoPoEDataset
 
 from tqdm.notebook import tqdm
 
@@ -118,10 +119,18 @@ class CrossValidator:
 class DataOrganizer:
     def __init__(self, name, data_path, crossvalidator, 
                  modalities=['csi', 'rimg', 'cimg', 'ctr', 'dpt', 'pd'],
-                 removal=Removal(remov)):
+                 removal=Removal(remov),
+                 dstype='default'):
         self.name = name
         self.data_path = data_path
         self.cross_validator = crossvalidator
+        
+        # Controls MyDataset type
+        if dstype == 'default':
+            self.dstype = MyDataset
+        elif dstype == 'mopoe':
+            self.dstype = MoPoEDataset
+        
         
         print(f'Cross validation plan at {crossvalidator.level} level')
         
@@ -336,7 +345,7 @@ class DataOrganizer:
                     single_pd=True, 
                     num_workers=14, 
                     save_dataset=False, 
-                    shuffle_test=True, 
+                    shuffle_test=False, 
                     pin_memory=True):
 
         print(f'\033[32mData Organizer: Generating loaders for {mode}: '
@@ -353,8 +362,8 @@ class DataOrganizer:
                 self.train_labels = self.removal(self.train_labels)
                 self.test_labels = self.removal(self.test_labels)
                 
-        tv_dataset = MyDataset(data, self.train_labels, csi_len, single_pd)
-        test_dataset = MyDataset(data, self.test_labels, csi_len, single_pd)
+        tv_dataset = self.dstype(data, self.train_labels, csi_len, single_pd)
+        test_dataset = self.dstype(data, self.test_labels, csi_len, single_pd)
             
         print(f' Train/Valid dataset length = {len(tv_dataset)}\n'
               f' Test dataset length = {len(test_dataset)}')
@@ -644,7 +653,7 @@ class DataOrganizerDANN(DataOrganizer):
     def __init__(self, *args, **kwargs):
         super(DataOrganizerDANN, self).__init__(*args, **kwargs)
         
-    def gen_loaders(self, mode='s', train_ratio=0.8, batch_size=64, csi_len=300, single_pd=True, num_workers=14, save_dataset=False, shuffle_test=True, pin_memory=True):
+    def gen_loaders(self, mode='s', train_ratio=0.8, batch_size=64, csi_len=300, single_pd=True, num_workers=14, save_dataset=False, shuffle_test=False, pin_memory=True):
 
         print(f'\033[32mData Organizer DANN: Generating loaders for {mode}: level = {self.level}, current test = {self.current_test}\033[0m')
         data = self.data.copy()
@@ -663,8 +672,8 @@ class DataOrganizerDANN(DataOrganizer):
                 data.pop('pd')
                 data.pop('cimg')
                 
-        dataset = MyDataset(data, self.train_labels, csi_len, single_pd)
-        test_dataset = MyDataset(data, self.test_labels, csi_len, single_pd)
+        dataset = self.dstype(data, self.train_labels, csi_len, single_pd)
+        test_dataset = self.dstype(data, self.test_labels, csi_len, single_pd)
             
         print(f' Train dataset length = {len(dataset)}\n'
               f' Test dataset length = {len(test_dataset)}')

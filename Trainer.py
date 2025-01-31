@@ -712,8 +712,12 @@ class BasicTrainer:
         self.plot_train_loss(autosave=True)
         self.test(loader='train', *args, **kwargs)
         self.plot_test(select_num=8, autosave=autosave)
-        self.test(loader='test', *args, **kwargs)
-        self.plot_test(select_num=8, autosave=autosave)
-        self.losslog.save('preds', self.save_path)
+        try:
+            self.test(loader='test', *args, **kwargs)
+            self.plot_test(select_num=8, autosave=autosave)
+        except Exception as e:
+            print('Test not successful: ', e)
+        finally:
+            self.losslog.save('preds', self.save_path)
         print(f'\n\033[32m{self.name} schedule Completed!\033[0m')
 
