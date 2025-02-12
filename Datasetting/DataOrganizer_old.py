@@ -382,50 +382,6 @@ class DataOrganizerEXT(DataOrganizer):
         print("Train and Test labels swapped!")
         
 
-class DANN_Loader:
-    def __init__(self, source_loader, target_loader):
-        self.source_loader = source_loader
-        self.target_loader = target_loader
-        self.source_iter = iter(source_loader)
-        self.target_iter = iter(target_loader)
-        self.maximum_iter = len(source_loader)
-        self.current = -1
-        
-    def __iter__(self):
-        return self
-        
-    def __next__(self):
-        self.current += 1
-        if self.current > self.maximum_iter:
-            # automatically reloop
-            self.reset()
-            raise StopIteration
-            
-        try:
-            source_data = next(self.source_iter)
-        except StopIteration:
-            self.source_iter = iter(self.source_loader)  # Reset the iterator
-            source_data = next(self.source_iter)         # Get the first batch again
-
-        try:
-            target_data = next(self.target_iter)
-        except StopIteration:
-            self.target_iter = iter(self.target_loader)  # Reset the iterator
-            target_data = next(self.target_iter)         # Get the first batch again
-
-        return source_data, target_data
-
-        
-    def __len__(self):
-        return self.maximum_iter
-    
-    def reset(self):
-        self.source_iter = iter(self.source_loader)
-        self.target_iter = iter(self.target_loader)
-        self.maximum_iter = len(self.source_loader)
-        self.current = -1
-        
-        
 class GuidedLoader:
     def __init__(self, source_loader, target_loader, target_guide_num=1):
         self.source_loader = source_loader
@@ -479,16 +435,20 @@ class GuidedLoader:
 
 class DANN_Loader2:
     """
-    Generates source smaples and target samples by 3:1.
+    Combines source and target loaders.
+    Generates source smaples and target samples by n:1.
+    Can combine guide batch with source.
     """
     
-    def __init__(self, source_loader, target_loader, target_guide=False, target_guide_num=1):
+    def __init__(self, source_loader, target_loader, source_rate=3, target_guide=False, target_guide_num=1):
         self.source_loader = source_loader
         self.target_loader = target_loader
         self.source_iter = iter(self.source_loader)
         self.target_iter = iter(self.target_loader)
         self.maximum_iter = len(source_loader) // 3
         self.current = -1
+        
+        self.source_rate = source_rate
         
         self.target_guide_batch = None
         self.target_guide = target_guide
@@ -510,13 +470,13 @@ class DANN_Loader2:
             
         try:
             # Fetch 3 samples from the source loader
-            source_samples = [next(self.source_iter) for _ in range(3)]
+            source_samples = [next(self.source_iter) for _ in range(self.source_rate)]
             source_batch = {key: torch.cat([sample[key] for sample in source_samples], dim=0) 
                             for key in source_samples[0]}  # Combine into a single batch
 
         except StopIteration:
             self.source_iter = iter(self.source_loader)  # Reset the iterator
-            source_samples = [next(self.source_iter) for _ in range(3)]
+            source_samples = [next(self.source_iter) for _ in range(self.source_rate)]
             source_batch = {key: torch.cat([sample[key] for sample in source_samples], dim=0) 
                             for key in source_samples[0]}  # Get the first batch again
             
@@ -609,26 +569,23 @@ class DataOrganizerDANN(DataOrganizer):
         return train_loader, valid_loader, test_loader, self.current_test
     
     
-def gen_dann_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
+def gen_dann_loaders(data_organizer, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
     #if data_organizer.cross_validator and isinstance(data_organizer.cross_validator, CrossValidator):
     #    data_organizer.regen_plan()
-    data_organizer.train = train
-    data_organizer.test = test
 
     data_organizer.gen_plan(subset_ratio=subset_ratio)
     source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
     data_organizer.swap_train_test()
     target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
+    
     dann_train_loader = DANN_Loader2(source_train_loader, target_train_loader, target_guide, target_guide_num)
-    dann_valid1 = DANN_Loader2(source_valid_loader, target_valid_loader)
-    dann_valid2 = DANN_Loader2(target_valid_loader, source_valid_loader)
-    dann_test_loader = DANN_Loader2(target_test_loader, source_valid_loader)
-    return dann_train_loader, dann_valid1, dann_valid2, dann_test_loader, current_test
+    # dann_valid1 = DANN_Loader2(source_valid_loader, target_valid_loader)
+    # dann_valid2 = DANN_Loader2(target_valid_loader, source_valid_loader)
+    # dann_test_loader = DANN_Loader2(target_test_loader, source_valid_loader)
+    return dann_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test
 
 
-def gen_double_valid_loaders(data_organizer, train=None, test=None, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
-    data_organizer.train = train
-    data_organizer.test = test
+def gen_double_valid_loaders(data_organizer, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
 
     data_organizer.gen_plan(subset_ratio=subset_ratio)
     source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
