@@ -75,8 +75,12 @@ class Tester:
         self.preds = self.preds.dropna(how='all')
         
     def fetch_preds_from_saved(self, path):
-        gt = np.load(f'{path}_R_GT.npy')
-        r_preds = np.load(f'{path}_R_PRED.npy')
+        try:
+            gt = np.load(f'{path}_R_GT.npy')
+            r_preds = np.load(f'{path}_R_PRED.npy')
+        except Exception:
+            gt = np.load(f'{path}_GT.npy')
+            r_preds = np.load(f'{path}_PRED.npy')
         tags = np.load(f'{path}_TAG.npy')
         abs_ind = np.load(f'{path}_IND.npy')
         self.total_length = len(gt)

@@ -179,10 +179,10 @@ class CSIEncoder(BasicCSIEncoder):
         self.feature_length = 1536
         self.pd_length = 62
 
-        # 6 * 30 * 100
-        # 128 * 28 * 98
-        # 256 * 14 * 49
-        # 512 * 7 * 25
+        # 6 * 30 * 300
+        # 128 * 28 * 298
+        # 256 * 14 * 149
+        # 512 * 7 * 75
 
         self.cnn = nn.Sequential(
             nn.Conv2d(6, 128, 5, 1, 1),
