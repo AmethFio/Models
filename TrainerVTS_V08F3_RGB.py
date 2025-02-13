@@ -348,6 +348,8 @@ class StudentTrainer(BasicTrainer):
             ctr = data['center']
             dpt = data['depth']
             
+            ret = self.student(data['csi'], data['pd'], rimg)
+            
             # 3-level loss
             feature_loss = self.feature_loss(ret['s_fea'], ret['t_fea'])
             latent_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
