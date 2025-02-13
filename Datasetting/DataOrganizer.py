@@ -169,7 +169,7 @@ class DataOrganizer:
     @timer
     def load(self, multi=False):
         
-        def load_single(fname, fpath, atm, etc):
+        def load_single(fname, fpath, atm, typ, etc):
             data = None
             label = None
             loaded = False
@@ -200,7 +200,6 @@ class DataOrganizer:
             data = None
             att_max = 6
             loaded = False
-            start = time.time()
             for attempt in range(1, att_max):
                 if loaded:
                     break
@@ -209,13 +208,12 @@ class DataOrganizer:
                 loadable, typ, etc = self.file_condition(file_name_, ext)
                 
                 if not loadable:
-                    end = time.time()
-                    print(f"\033[33mSkipping {file_name_}{ext}, elapsed {(end - start):.4f} sec\033[0m")
+                    print(f"\033[33mSkipping {file_name_}{ext}\033[0m")
                     loaded = True
                     
                 else:
                     try:
-                        label, data, loaded, lg = load_single(file_name_, ext, file_path, atm, start, etc)
+                        label, data, loaded, lg = load_single(file_name_, file_path, atm, etc)
 
                     except Exception as e:
                         print(f"\033[31mError: {e} for {file_name_}{ext} (Attempt {attempt})\033[0m")
@@ -239,23 +237,21 @@ class DataOrganizer:
                     self.data[modality] = {}
                     
                 if modality in ('rimg', 'rgbimg', 'cimg'):
-                    max_value = 1.
-                    
+
                     if d.dtype == np.uint8:
-                        max_value = 255
+                        d = d.astype(np.float32) / 255
                     elif d.dtype == np.uint16:
-                        max_value = 65535
+                        d = d.astype(np.float32) / 65535
                     # else:
                     #     raise ValueError(f"Only support uint8 or uint16, got {d.dtype}")
-                    d = d.astype(np.float32) / max_value
-                    
+
                 self.data[modality][name] = d
                 
         # Main loop
         
         fail = []
         load_logs = []
-        skip_logs = []
+        # skip_logs = []
         
         for dpath in self.data_path:
             # if multi:
@@ -272,18 +268,22 @@ class DataOrganizer:
             print('Single-process loading...')
             
             # results = file_finder(dpath, load_single, process_name="Data Organizer")
-            files = glob(f"{dpath}/**/*", recursive=True)
+            files = glob(f"{dpath}/**/*.npy", recursive=True) + glob(f"{dpath}/**/*.csv", recursive=True)
+            files = [f for f in files if self.file_condition(os.path.basename(f))[0]]  
+            
             for file_path in files:
                 file_name = os.path.basename(file_path)
 
-                loadable, typ, etc = self.file_condition(file_name)
-                if not loadable:
-                    skip_logs.append(f"\033[33mSkipping {file_name}\033[0m")
+                # loadable, typ, etc = self.file_condition(file_name)
+                # if not loadable:
+                #     skip_logs.append(f"\033[33mSkipping {file_name}\033[0m")
                 
-                else:
-                    label, data, etc, lg = load_single(file_name, file_path, '', etc)
-                    unpack_results(label, data, fail)
-                    load_logs.append(lg)
+                #else:
+                _, typ, etc = self.file_condition(file_name)
+                
+                label, data, etc, lg = load_single(file_name, file_path, '', typ, etc)
+                unpack_results(label, data, fail)
+                load_logs.append(lg)
         
         # print("\n".join(load_logs))
         print(f"\nLoad complete!")
