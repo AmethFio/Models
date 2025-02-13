@@ -192,9 +192,9 @@ class DataOrganizer:
                             self.data[modality][name] = np.load(os.path.join(path, file_name), mmap_mode='r')
                             
                             if self.data[modality][name].dtype == np.uint8:
-                                self.data[modality][name].astype(np.float32) /= 255
+                                self.data[modality][name] = self.data[modality][name].astype(np.float32) / 255
                             elif self.data[modality][name].dtype == np.uint16:
-                                self.data[modality][name].astype(np.float32) /= 65535
+                                self.data[modality][name] = self.data[modality][name].astype(np.float32) / 65535
                             
                             
                             print(f'Loaded {file_name}')
