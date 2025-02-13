@@ -278,8 +278,8 @@ class StudentTrainer(BasicTrainer):
         # }
         # self.early_stopping_trigger = 'target'
         
-        self.latent_weight = 0.1
-        self.img_weight = 1.
+        self.latent_weight = 0.5
+        self.img_weight = 1.e-4
         self.center_weight = 1.
         self.depth_weight = 1.
         self.feature_weight = 1.
@@ -352,9 +352,9 @@ class StudentTrainer(BasicTrainer):
             
             # 3-level loss
             feature_loss = self.feature_loss(ret['s_fea'], ret['t_fea'])
-            latent_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
-            center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(data['center']))
-            depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(data['depth']))
+            latent_loss, mu_loss, logvar_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
+            center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(ctr))
+            depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(dpt))
             image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
         
         loss = feature_loss * self.feature_weight +\
