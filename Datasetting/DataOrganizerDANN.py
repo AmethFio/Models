@@ -16,7 +16,7 @@ from pandas.compat import pickle_compat
 from misc import timer, file_finder, file_finder_multi
 import time
 from Datasetting.Dataset import *
-from Dataorganizer import *
+from DataOrganizer import *
 
 from tqdm.notebook import tqdm
 

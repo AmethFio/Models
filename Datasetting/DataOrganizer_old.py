@@ -190,6 +190,13 @@ class DataOrganizer:
                             if modality not in self.data.keys():
                                 self.data[modality]: dict = {}
                             self.data[modality][name] = np.load(os.path.join(path, file_name), mmap_mode='r')
+                            
+                            if self.data[modality][name].dtype == np.uint8:
+                                self.data[modality][name].astype(np.float32) /= 255
+                            elif self.data[modality][name].dtype == np.uint16:
+                                self.data[modality][name].astype(np.float32) /= 65535
+                            
+                            
                             print(f'Loaded {file_name}')
                     
         print(f"\nLoad complete!")
