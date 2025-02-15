@@ -255,6 +255,7 @@ class DataOrganizer:
                     csi_len=300, 
                     single_pd=True, 
                     num_workers=14, 
+                    split_valid=True,
                     save_dataset=False, 
                     shuffle_test=False, 
                     pin_memory=True):
@@ -280,9 +281,15 @@ class DataOrganizer:
               f' Test dataset length = {len(test_dataset)}')
         
         # Generate loaders
-        train_size = int(train_ratio * len(tv_dataset))
-        valid_size = len(tv_dataset) - train_size
-        train_set, valid_set = random_split(tv_dataset, [train_size, valid_size])
+        if split_valid:
+            train_size = int(train_ratio * len(tv_dataset))
+            valid_size = len(tv_dataset) - train_size
+            train_set, valid_set = random_split(tv_dataset, [train_size, valid_size])
+        else:
+            train_set = tv_dataset
+            train_size = len(tv_dataset)
+            valid_size = 0
+
         test_size = len(test_dataset)
         
         def worker_init_fn(worker_id):
@@ -440,7 +447,7 @@ class GuidedLoader:
         self.current = -1
         
 
-class DANN_Loader2:
+class DANN_Loader:
     """
     Combines source and target loaders.
     Generates source smaples and target samples by n:1.
@@ -576,19 +583,19 @@ class DataOrganizerDANN(DataOrganizer):
         return train_loader, valid_loader, test_loader, self.current_test
     
     
-def gen_dann_loaders(data_organizer, subset_ratio=1, batch_size=64, num_workers=2, target_guide=False, target_guide_num=1):
+def gen_dann_loaders(data_organizer, batch_size=64, num_workers=2, source_rate=3, target_guide=False, target_guide_num=1):
     #if data_organizer.cross_validator and isinstance(data_organizer.cross_validator, CrossValidator):
     #    data_organizer.regen_plan()
-
-    data_organizer.gen_plan(subset_ratio=subset_ratio)
-    source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
-    data_organizer.swap_train_test()
-    target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size)
+    data_organizer.reset_plan()
+    data_organizer.gen_plan()
+    source_train_loader, source_valid_loader, target_test_loader, current_test = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size, split_valid=False)
+    data_organizer.swap_train_test(split_valid=False)
+    target_train_loader, target_valid_loader, source_test_loader, _ = data_organizer.gen_loaders(mode='s', num_workers=num_workers, batch_size=batch_size, split_valid=False)
     
-    dann_train_loader = DANN_Loader2(source_train_loader, target_train_loader, target_guide, target_guide_num)
-    # dann_valid1 = DANN_Loader2(source_valid_loader, target_valid_loader)
-    # dann_valid2 = DANN_Loader2(target_valid_loader, source_valid_loader)
-    # dann_test_loader = DANN_Loader2(target_test_loader, source_valid_loader)
+    dann_train_loader = DANN_Loader(source_train_loader, target_train_loader, source_rate, target_guide, target_guide_num)
+    # dann_valid1 = DANN_Loader(source_valid_loader, target_valid_loader)
+    # dann_valid2 = DANN_Loader(target_valid_loader, source_valid_loader)
+    # dann_test_loader = DANN_Loader(target_test_loader, source_valid_loader)
     return dann_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test
 
 

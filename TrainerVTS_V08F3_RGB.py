@@ -228,6 +228,7 @@ class StudentTrainer(BasicTrainer):
     def __init__(self,
                  alpha=0.8,
                  recon_lossfunc=nn.MSELoss(),
+                 adapting=False,
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
@@ -272,13 +273,14 @@ class StudentTrainer(BasicTrainer):
                                                         )}
         
         # FOR ADAPTING
-        # self.valid_phases = {
-        #     'source': ValidationPhase(name='source', loader='valid'),
-        #     'target': ValidationPhase(name='target', loader='valid2')
-        # }
-        # self.early_stopping_trigger = 'target'
+        if adapting:
+            self.valid_phases = {
+                'source': ValidationPhase(name='source', loader='valid'),
+                'target': ValidationPhase(name='target', loader='valid2')
+            }
+            self.early_stopping_trigger = 'target'
         
-        self.latent_weight = 0.5
+        self.latent_weight = 20
         self.img_weight = 1.e-4
         self.center_weight = 1.
         self.depth_weight = 1.
