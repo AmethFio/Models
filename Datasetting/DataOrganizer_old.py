@@ -215,9 +215,9 @@ class DataOrganizer:
     def gen_plan(self, specify_test=None, save=False, notion=''):
         
         if save:
-            print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {subset_ratio}...\033[0m', end='')
+            print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {self.cross_validator.subset_ratio}...\033[0m', end='')
             
-            with open(f'../dataset/Door_EXP/{self.cross_validator.level}_r{subset_ratio}_{self.current_test}{notion}.pkl', 'wb') as f:
+            with open(f'../dataset/Door_EXP/{self.cross_validator.level}_r{self.cross_validator.subset_ratio}_{self.cross_validator.current_test}{notion}.pkl', 'wb') as f:
                 plan = list(self.cross_validator)
                 pickle.dump(plan, f)
                 
@@ -306,6 +306,7 @@ class DataOrganizer:
             print(f" Exported train loader of len {len(train_loader)}, batch size = {batch_size}\n")
         else:
             train_loader = None
+            print(' None train loader')
             
         if valid_size > 0:
             valid_loader = DataLoader(valid_set, 
@@ -318,6 +319,7 @@ class DataOrganizer:
             print(f" Exported valid loader of len {len(valid_loader)}, batch size = {batch_size}\n")
         else:
             valid_loader = None
+            print(' None valid loader')
             
         if test_size > 0:
             test_loader = DataLoader(test_dataset, 
@@ -332,6 +334,7 @@ class DataOrganizer:
             print(f" Exported test loader of len {len(test_loader)}, batch size = {batch_size}\n")
         else:
             test_loader = None
+            print(' None test loader')
         
         return train_loader, valid_loader, test_loader, self.current_test
         

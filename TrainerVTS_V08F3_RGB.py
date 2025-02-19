@@ -247,6 +247,17 @@ class StudentTrainer(BasicTrainer):
                            'T_CTR', 'T_DPT',
                            'S_CTR', 'S_DPT',
                            'TAG', 'IND')
+
+        # FOR ADAPTING
+        if adapting:
+            self.valid_phases = {
+                'source': ValidationPhase(name='source', loader='valid'),
+                'target': ValidationPhase(name='target', loader='valid2')
+            }
+            self.early_stopping_trigger = 'target'
+
+            # self.loss_terms = ('LOSS', 'IMG', 'CTR', 'DPT')
+
         self.losslog = MyLossCTR(name=self.name,
                               loss_terms=self.loss_terms,
                               pred_terms=self.pred_terms,
@@ -271,19 +282,12 @@ class StudentTrainer(BasicTrainer):
                                                         eval_module = ['imgen', 'rimgde', 'cimgde', 'ctrde'],
                                                         verbose=False
                                                         )}
-        
-        # FOR ADAPTING
-        if adapting:
-            self.valid_phases = {
-                'source': ValidationPhase(name='source', loader='valid'),
-                'target': ValidationPhase(name='target', loader='valid2')
-            }
-            self.early_stopping_trigger = 'target'
+
         
         self.latent_weight = 20
         self.img_weight = 1.e-4
-        self.center_weight = 1.
-        self.depth_weight = 1.
+        self.center_weight = 1.e-3
+        self.depth_weight = 10.
         self.feature_weight = 1.
         
     def data_preprocess(self, mode, data2):
@@ -319,29 +323,73 @@ class StudentTrainer(BasicTrainer):
         feature_loss = self.recon_lossfunc(feature_s, feature_t)
         return feature_loss
 
+    def post_coord_loss(self, rimg, gt_center, gt_depth):
+        mask = torch.where(rimg > 0.01, 1., 0.)
+        N, C, H, W = mask.shape
+        y_coords = torch.arange(H, device=mask.device).view(1, 1, H, 1)
+        x_coords = torch.arange(W, device=mask.device).view(1, 1, 1, W)
+
+        x_center = (x_coords * mask).sum(dim=[2, 3]) / mask.sum(dim=[2, 3])
+        y_center = (y_coords * mask).sum(dim=[2, 3]) / mask.sum(dim=[2, 3])
+
+        post_center = torch.stack((x_center, y_center), dim=-1)  # Shape: (N, 2)
+
+        post_depth = torch.mean(rimg[rimg != 0])
+
+        center_loss = self.recon_lossfunc(post_center, gt_center)
+        depth_loss = self.recon_lossfunc(post_depth, gt_depth)
+
+        return center_loss, depth_loss
+
     def calculate_loss(self, data):
         if len(data) == 2:
             # Source + Target
-            source_data, target_data = data2
+            source_data, target_data = data
             
             cimg = torch.where(source_data['cimg'] > 0, 1., 0.)
             rimg = target_data['rimg']
             ctr = target_data['center']
             dpt = target_data['depth']
+            tag = target_data['tag']
+            ind = target_data['ind']
             
             source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
+            ret = target_ret
             
             # 3-level loss
-            feature_loss = torch.mean(self.feature_loss(source_ret['s_fea'], source_ret['t_fea']),
-                                      self.feature_loss(target_ret['s_fea'], target_ret['t_fea']))
+            source_feature_loss = self.feature_loss(source_ret['s_fea'], source_ret['t_fea'])
+            feature_loss = source_feature_loss
+
+            source_latent_loss, source_mu_loss, source_logvar_loss = self.kd_loss(source_ret['s_mu'], source_ret['s_logvar'], source_ret['t_mu'], source_ret['t_logvar'])
             
-            latent_loss = torch.mean(self.kd_loss(source_ret['s_mu'], source_ret['s_logvar'], source_ret['t_mu'], source_ret['t_logvar']),
-                                     self.kd_loss(target_ret['s_mu'], target_ret['s_logvar'], target_ret['t_mu'], target_ret['t_logvar']))
+            latent_loss = source_latent_loss
+            mu_loss = source_mu_loss
+            logvar_loss = source_logvar_loss  
             
             center_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             depth_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
+            # center_loss, depth_loss = self.post_coord_loss(target_ret['s_rimage'], ctr, dpt)
+
             image_loss = self.img_loss(source_ret['s_cimage'], cimg) / source_ret['s_cimage'].shape[0]
+                    
+            loss = image_loss * self.img_weight
+            loss += center_loss * self.center_weight
+            loss += depth_loss * self.depth_weight
+            loss += feature_loss * self.feature_weight
+            loss += latent_loss * self.latent_weight
+
+            TMP_LOSS = {
+                'LOSS'   : loss,
+                'LATENT' : latent_loss * self.latent_weight,
+                'MU'     : mu_loss * self.alpha,
+                'LOGVAR' : logvar_loss * (1 - self.alpha),
+                'FEATURE': feature_loss * self.feature_weight,
+                'IMG'    : image_loss * self.img_weight,
+                'CTR'    : center_loss * self.center_weight,
+                'DPT'    : depth_loss * self.depth_weight
+            }
+
             
         else:
             # Single domain
@@ -349,6 +397,8 @@ class StudentTrainer(BasicTrainer):
             rimg = data['rimg']
             ctr = data['center']
             dpt = data['depth']
+            tag = data['tag']
+            ind = data['ind']
             
             ret = self.student(data['csi'], data['pd'], rimg)
             
@@ -358,14 +408,14 @@ class StudentTrainer(BasicTrainer):
             center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(ctr))
             depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(dpt))
             image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
-        
-        loss = feature_loss * self.feature_weight +\
-            latent_loss * self.latent_weight +\
-            image_loss * self.img_weight +\
-            center_loss * self.center_weight +\
-            depth_loss * self.depth_weight
-        
-        TMP_LOSS = {
+
+            loss = feature_loss * self.feature_weight +\
+                latent_loss * self.latent_weight +\
+                image_loss * self.img_weight +\
+                center_loss * self.center_weight +\
+                depth_loss * self.depth_weight
+
+            TMP_LOSS = {
             'LOSS'   : loss,
             'LATENT' : latent_loss * self.latent_weight,
             'MU'     : mu_loss * self.alpha,
@@ -375,6 +425,7 @@ class StudentTrainer(BasicTrainer):
             'CTR'    : center_loss * self.center_weight,
             'DPT'    : depth_loss * self.depth_weight
             }
+        
         
         PREDS = {
             'R_GT'    : rimg,
@@ -391,8 +442,8 @@ class StudentTrainer(BasicTrainer):
             'GT_DPT'  : dpt,
             'S_DPT'   : ret['s_depth'],
             'T_DPT'   : ret['t_depth'],
-            'TAG'     : data['tag'],
-            'IND'     : data['ind']
+            'TAG'     : tag,
+            'IND'     : ind
                 }
         
         return PREDS, TMP_LOSS

@@ -334,7 +334,7 @@ class StudentTrainer(BasicTrainer):
                  alpha=0.8,
                  recon_lossfunc=nn.MSELoss(),
                  with_cimg_loss=False,
-                 lstm_steps=7,
+                 lstm_steps=75,
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
