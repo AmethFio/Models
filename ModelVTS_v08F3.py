@@ -54,6 +54,15 @@ def reparameterize(mu, logvar):
     return mu + eps * torch.exp(logvar / 2)
 
 
+def initialize_weights(model):
+    for layer in model.modules():
+        if isinstance(layer, (nn.Conv2d, nn.Linear)):
+            init.kaiming_normal_(layer.weight, mode='fan_out', nonlinearity='relu')
+            if layer.bias is not None:
+                init.zeros_(layer.bias)
+    return model
+
+
 class Interpolate(nn.Module):
     def __init__(self, size, mode='bilinear'):
         """

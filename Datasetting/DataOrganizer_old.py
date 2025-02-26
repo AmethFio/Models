@@ -213,35 +213,36 @@ class DataOrganizer:
         print("\033[32mData Organizer: Data iterator reset!\033[0m")
     
     def gen_plan(self, specify_test=None, save=False, notion=''):
+
+        # Divide train and test
+        current_test = None
+        plan = next(self.cross_validator)
+        if len(plan) == 3:
+            train_labels, test_labels, current_test = plan
+        elif len(plan) == 4:
+            train_labels, test_labels, train_range, current_test = plan
+        while True:
+            if specify_test is not None and current_test != specify_test:
+                plan = next(self.cross_validator)
+                if len(plan) == 3:
+                    train_labels, test_labels, current_test = plan
+                elif len(plan) == 4:
+                    train_labels, test_labels, train_range, current_test = plan
+            else:
+                break
         
-        if save:
-            print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {self.cross_validator.subset_ratio}...\033[0m', end='')
+        self.train_labels, self.test_labels, self.current_test = train_labels, test_labels, current_test
+
+    def save_plan(self, notion=''):
+        # Be sure to save plan before yielding from the cross validator
+        print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {self.cross_validator.subset_ratio}...\033[0m', end='')
+        
+        with open(f'../dataset/Door_EXP/{self.cross_validator.level}_r{self.cross_validator.subset_ratio}_{self.cross_validator.current_test}{notion}.pkl', 'wb') as f:
+            plan = list(self.cross_validator)
+            pickle.dump(plan, f)
             
-            with open(f'../dataset/Door_EXP/{self.cross_validator.level}_r{self.cross_validator.subset_ratio}_{self.cross_validator.current_test}{notion}.pkl', 'wb') as f:
-                plan = list(self.cross_validator)
-                pickle.dump(plan, f)
-                
-            print('Done!')
-            
-        else:
-            # Divide train and test
-            current_test = None
-            plan = next(self.cross_validator)
-            if len(plan) == 3:
-                train_labels, test_labels, current_test = plan
-            elif len(plan) == 4:
-                train_labels, test_labels, train_range, current_test = plan
-            while True:
-                if specify_test is not None and current_test != specify_test:
-                    plan = next(self.cross_validator)
-                    if len(plan) == 3:
-                        train_labels, test_labels, current_test = plan
-                    elif len(plan) == 4:
-                        train_labels, test_labels, train_range, current_test = plan
-                else:
-                    break
-            
-            self.train_labels, self.test_labels, self.current_test = train_labels, test_labels, current_test
+        print('Done!')
+        self.reset_plan()
     
     def load_plan(self, path):
         with open(path, 'rb') as f:
@@ -337,6 +338,10 @@ class DataOrganizer:
             print(' None test loader')
         
         return train_loader, valid_loader, test_loader, self.current_test
+    
+    def swap_train_test(self):
+        self.train_labels, self.test_labels = self.test_labels, self.train_labels
+        print("Train and Test labels swapped!")
         
         
 class DataOrganizerEXT(DataOrganizer):

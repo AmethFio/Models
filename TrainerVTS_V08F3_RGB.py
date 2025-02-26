@@ -101,10 +101,10 @@ class TeacherTrainer(BasicTrainer):
         self.losslog.dpt = ['GT_DPT', 'DPT_PRED']
         
         self.teacher = Teacher(device=self.device)
-        self.models = {'imgen': ImageEncoder(latent_dim=128).to(self.device),
-                       'cimgde': ImageDecoder(latent_dim=128).to(self.device),
-                       'rimgde': ImageDecoder(latent_dim=128).to(self.device),
-                       'ctrde': CenterDecoder().to(self.device)
+        self.models = {'imgen': self.teacher.imgen,
+                       'cimgde': self.teacher.cimgde,
+                       'rimgde': self.teacher.rimgde,
+                       'ctrde': self.teacher.ctrde
                        }
         
     def kl_loss(self, mu, logvar):
