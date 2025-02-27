@@ -258,6 +258,7 @@ class DataOrganizer:
                     num_workers=14, 
                     split_valid=True,
                     save_dataset=False, 
+                    save_path='../dataset/',
                     shuffle_test=False, 
                     pin_memory=True):
 
@@ -336,6 +337,40 @@ class DataOrganizer:
         else:
             test_loader = None
             print(' None test loader')
+
+        if save_dataset:
+            print('Saving dataset...')
+            if train_size > 0:
+                name = 'tv' if not split_valid else 'train'
+                train_config = {
+                    'batch_size': batch_size,
+                    'shuffle': True,
+                    'drop_last': True,
+                    'pin_memory': True,
+                    'num_workers': num_workers,
+                    'worker_init_fn': worker_init_fn
+                }
+                torch.save(train_set, os.path.join(save_path, f'{name}.pth'))
+                torch.save(train_config, os.path.join(save_path, f'{name}_config.pth'))
+                print('Saved train')
+
+            if valid_size > 0:
+                torch.save(valid_set, os.path.join(save_path, 'valid.pth'))
+                print('Saved valid')
+            
+            if test_size > 0:
+                test_config = {
+                    'batch_size': batch_size,
+                    'shuffle': False,
+                    'drop_last': True,
+                    'pin_memory': True,
+                    'num_workers': num_workers,
+                    'worker_init_fn': worker_init_fn
+                }
+                torch.save(train_config, os.path.join(save_path, 'test_config.pth'))
+                torch.save(test_dataset, os.path.join(save_path, 'test.pth'))
+                print('Saved train')
+
         
         return train_loader, valid_loader, test_loader, self.current_test
     

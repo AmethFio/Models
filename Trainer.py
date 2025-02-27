@@ -119,6 +119,7 @@ class TrainingPhase:
                  conditioned_update=False,
                  verbose=False,
                  loss_arg={},
+                 plot_terms='all',
                  *args,
                  **kwargs):
         
@@ -151,6 +152,7 @@ class TrainingPhase:
         self.TMP_LOSS = None
         
         self.loss_arg = loss_arg
+        self.plot_terms = plot_terms
         self.kwargs = kwargs
     
     def __call__(self, flag, models, data, calculate_loss):
@@ -323,6 +325,7 @@ class BasicTrainer:
         self.loss_terms = ('loss1', 'loss2', '...')
         self.pred_terms = ('predict1', 'predict2', '...')
         self.losslog = MyLossLog(self.name, self.loss_terms, self.pred_terms)
+        self.calculate_losses = {'main': self.calculate_loss}
         
         self.current_epoch = 0
         self.early_stopping_trigger = 'main'
@@ -404,7 +407,7 @@ class BasicTrainer:
                 else:
                     phase_flag = True
                     
-                _, TMP_LOSS_ = phase(phase_flag, self.models, data_, self.calculate_loss)
+                _, TMP_LOSS_ = phase(phase_flag, self.models, data_, self.calculate_losses[name])
                 TMP_LOSS.update(TMP_LOSS_)
 
             # Log loss
@@ -431,7 +434,7 @@ class BasicTrainer:
                 # Prepare data
                 data_ = self.data_preprocess('valid', data)
 
-                PREDS, TMP_LOSS = phase(self.models, data_, self.calculate_loss)
+                PREDS, TMP_LOSS = phase(self.models, data_, self.calculate_losses.get(phase.name, self.calculate_losses['main']))
                 self.losslog('pred', PREDS)
                 
                 if phase.name != 'test' and self.current_epoch % 10 == 0 and idx == 1:
@@ -622,11 +625,12 @@ class BasicTrainer:
             f"{' '.join([key + ': ' + str(np.average(value.item())) for key, value in TEST_LOSS.items()])}\n"
             )
 
-    def plot_train_loss(self, title=None, double_y=False, plot_terms='all', autosave=False, **kwargs):
-        fig = self.losslog.plot_train(title, plot_terms, double_y)
-        if autosave:
-            for filename, fig in fig.items():
-                fig.savefig(f"{self.save_path}{filename}")
+    def plot_train_loss(self, double_y=False, plot_terms='all', autosave=False, **kwargs):
+        for name, phase in self.training_phases.items():
+            fig = self.losslog.plot_train(name, phase.plot_terms, double_y)
+            if autosave:
+                for filename, fig in fig.items():
+                    fig.savefig(f"{self.save_path}{filename}")
 
     def plot_test(self, select_inds=None, select_num=8, autosave=False, **kwargs):
         # According to actual usages
