@@ -263,7 +263,7 @@ class TrainingPhase:
         
         
 class ValidationPhase:
-    def __init__(self, name, loader='valid', best_loss='LOSS', loss_arg={}):
+    def __init__(self, name, loader='valid', best_loss='LOSS', loss_arg={}, plot_terms='all'):
         self.name = name
         self.loader = loader
         self.best_loss = best_loss
@@ -271,6 +271,7 @@ class ValidationPhase:
         self.best_vloss_ep = 0
         self.loss_arg = loss_arg
         self.num_batches = None
+        self.plot_terms = plot_terms
         
     def __call__(self, models, data, calculate_loss):
 
@@ -427,7 +428,7 @@ class BasicTrainer:
             if phase.name == 'test':
                 progress_bar.set_description(f"{self.notion} {self.name} {phase.name} test @ ep {self.current_epoch}")
             else:
-                progress_bar.set_description(f"{self.notion} {self.name} {phase.name} valid: ep {self.current_epoch}/{self.epochs}")
+                progress_bar.set_description(f"{self.notion} {self.name} {phase.name} {phase.loader}: ep {self.current_epoch}/{self.epochs}")
                             
             for idx, data in enumerate(self.dataloader.get(phase.loader, 'valid'), 1):
                 
@@ -555,14 +556,14 @@ class BasicTrainer:
             print('')
             for model in self.models:
                 self.models[model].eval()
-                
-            self.losslog.reset('pred', dataset='VALID')
             
             # Validate per phase
             for name, phase in self.valid_phases.items():
                 
                 if name == 'default_test':
                     continue
+
+                self.losslog.reset('pred', dataset='VALID')
 
                 VALID_LOSS = {loss: [] for loss in self.loss_terms}
                 
@@ -662,7 +663,7 @@ class BasicTrainer:
         
     def load(self, path, name='Student', mode='checkpoint', load_optimizer=False, gpu=None):
         print(f"\033[32m=========={self.notion} {self.name} Loading==========\033[0m")
-
+        hit = False
         # Collect all matching file paths for each model
         model_files = {model_name: None for model_name in self.models.keys()}
         optimizer_files = {phase_name: None for phase_name in self.training_phases.keys()}
@@ -684,16 +685,14 @@ class BasicTrainer:
         for model_name, model in self.models.items():
             file_path = model_files.get(model_name)
             if file_path:
+                hit = True
                 checkpoint = torch.load(file_path, map_location='cpu')
                 if 'model_state_dict' in checkpoint:
                     model.load_state_dict(checkpoint['model_state_dict'])
                 else:
                     model.load_state_dict(checkpoint)
                 
-                if model_name == 'rimgde':
-                    model.to(self.device2)
-                else:
-                    model.to(self.device)
+                model.to(self.device)
                 ep = f" at epoch {checkpoint.get('epoch')}" if checkpoint.get('epoch') else ''
                 self.start_ep = checkpoint.get('epoch', 0)
                 print(f"Loaded model {model_name}{ep} from {file_path}!")
@@ -709,6 +708,10 @@ class BasicTrainer:
                     ep = f" at epoch {checkpoint.get('epoch')}" if checkpoint.get('epoch') else ''
                     lr = f" lr {checkpoint.get('lr')}" if checkpoint.get('lr') else ''
                     print(f"Loaded optimizer {phase_name}{ep}{lr} from {file_path}!")
+
+        # Warning
+        if not hit:
+            print(f"\033[31mCheck path: did not load any model!\033[0m")
 
 
     def schedule(self, autosave=True, *args, **kwargs):

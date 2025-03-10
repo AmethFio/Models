@@ -105,7 +105,7 @@ class MyLossLog:
                 
     def reset(self, *modes, dataset: str = 'TRAIN'):
         for mode in modes:
-            if mode in ('train', 'valid', 'test'):
+            if mode in ('train', 'valid', 'valid2', 'test'):
                 for loss in self.loss.values():
                     loss.reset(mode)
             else:

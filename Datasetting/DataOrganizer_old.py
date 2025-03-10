@@ -235,13 +235,13 @@ class DataOrganizer:
 
     def save_plan(self, notion=''):
         # Be sure to save plan before yielding from the cross validator
-        print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {self.cross_validator.subset_ratio}...\033[0m', end='')
+        print(f'\033[32mData Organizer: Saving plan {self.cross_validator.level} @ {self.cross_validator.subset_ratio}...\033[0m')
         
         with open(f'../dataset/Door_EXP/{self.cross_validator.level}_r{self.cross_validator.subset_ratio}_{self.cross_validator.current_test}{notion}.pkl', 'wb') as f:
             plan = list(self.cross_validator)
             pickle.dump(plan, f)
             
-        print('Done!')
+        print('Plan saved!')
         self.reset_plan()
     
     def load_plan(self, path):
@@ -340,8 +340,10 @@ class DataOrganizer:
 
         if save_dataset:
             print('Saving dataset...')
+            save_path = os.path.join(save_path, self.current_test)
+            os.makedirs(save_path, exist_ok=True)
+
             if train_size > 0:
-                name = 'tv' if not split_valid else 'train'
                 train_config = {
                     'batch_size': batch_size,
                     'shuffle': True,
@@ -350,8 +352,8 @@ class DataOrganizer:
                     'num_workers': num_workers,
                     'worker_init_fn': worker_init_fn
                 }
-                torch.save(train_set, os.path.join(save_path, f'{name}.pth'))
-                torch.save(train_config, os.path.join(save_path, f'{name}_config.pth'))
+                torch.save(train_set, os.path.join(save_path, 'train.pth'))
+                torch.save(train_config, os.path.join(save_path, 'train_config.pth'))
                 print('Saved train')
 
             if valid_size > 0:
@@ -377,6 +379,74 @@ class DataOrganizer:
     def swap_train_test(self):
         self.train_labels, self.test_labels = self.test_labels, self.train_labels
         print("Train and Test labels swapped!")
+
+
+class DataSetLoader:
+    def __init__(self, path):
+        self.path = path
+
+        self.train_set = None
+        self.valid_set = None
+        self.test_set = None
+
+        self.train_config = None
+        self.valid_config = None
+        self.test_config = None
+
+    def load(self):
+
+        paths = os.walk(path)
+        print(f'Loading {path}...\n')
+        for path, _, file_lst in paths:
+            for file_name in file_lst:
+                file_name_, ext = os.path.splitext(file_name)
+                
+                # Load pth
+                if ext == '.pth':
+                    loaded = torch.load(os.path.join(path, file_name))
+                    data_type = None
+                    
+                    # Check for 'train', 'valid', or 'test' in the file name
+                    for prefix in ['train', 'valid', 'test']:
+                        if prefix in file_name_:
+                            data_type = prefix
+                            break
+                    
+                    # If the config is part of the file name, map it accordingly
+                    if data_type:
+                        config_key = f'{data_type}_config' if 'config' in file_name_ else f'{data_type}_set'
+                        setattr(self, config_key, loaded)
+
+    def gen_loaders(self):
+        if self.train_set is not None:
+            train_loader = DataLoader(self.train_set, 
+                                      **self.train_config
+                                    )
+            print(f" Exported train loader of len {len(train_loader)}, batch size = {self.train_config['batch_size']}\n")
+        else:
+            train_loader = None
+            print(' None train loader')
+            
+        if self.valid_set is not None:
+            valid_loader = DataLoader(self.valid_set, 
+                                      **self.valid_config
+                                    )
+            print(f" Exported valid loader of len {len(valid_loader)}, batch size = {self.valid_config['batch_size']}\n")
+        else:
+            valid_loader = None
+            print(' None valid loader')
+            
+        if self.test_set is not None:
+            test_loader = DataLoader(self.test_set,
+                                     **self.test_config
+                                    )
+        
+            print(f" Exported test loader of len {len(test_loader)}, batch size = {self.test_config['batch_size']}\n")
+        else:
+            test_loader = None
+            print(' None test loader')
+
+        return train_loader, valid_loader, test_loader
         
         
 class DataOrganizerEXT(DataOrganizer):
