@@ -45,7 +45,7 @@ def colors(arrays):
     """
     arr = -np.log(arrays)
     norm = plt.Normalize(arr.min(), arr.max())
-    map_vir = cm.get_cmap(name='viridis')
+    map_vir = plt.cm.get_cmap(name='viridis')
     c = map_vir(norm(arr))
     return c
 
