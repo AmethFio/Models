@@ -456,7 +456,6 @@ class StudentTrainer(BasicTrainer):
         # source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
         # target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
         # cos_sim = torch.matmul(target_coord, source_coord.T)
-        # Clamp to ensure no floating-point errors push values outside [-1, 1]
         # cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
         # max_sim_values, indices = cos_sim.max(dim=1)
         # sim_weight = 1 - max_sim_values
@@ -529,7 +528,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
             
@@ -628,7 +627,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
             
@@ -695,7 +694,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
 
             # For Domain_classifier
@@ -731,7 +730,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
 
