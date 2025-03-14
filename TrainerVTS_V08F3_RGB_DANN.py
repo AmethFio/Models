@@ -738,11 +738,17 @@ class StudentTrainer(BasicTrainer):
             source_coord = torch.cat((source_data['center'][..., 0].reshape(-1, 1), source_data['depth'].reshape(-1, 1)), dim=-1)
             target_coord = torch.cat((target_data['center'][..., 0].reshape(-1, 1), target_data['depth'].reshape(-1, 1)), dim=-1)
 
+            t_supervision = (source_ret['t_fea'], target_ret['s_fea'], 
+                             source_ret['t_mu'], source_ret['t_logvar'],
+                             target_ret['s_mu'], target_ret['s_logvar'])
+            
+            s_supervision = (source_ret['s_fea'], target_ret['s_fea'], 
+                             source_ret['s_mu'], source_ret['s_logvar'],
+                             target_ret['s_mu'], target_ret['s_logvar'])
+
             match_fea_loss, match_lat_loss = self.match_coord_loss(
                 source_coord, target_coord, 
-                source_ret['t_fea'], target_ret['s_fea'], 
-                source_ret['t_mu'], source_ret['t_logvar'],
-                target_ret['s_mu'], target_ret['s_logvar']
+                *s_supervision
                 )
             target_ctr_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             target_dpt_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
