@@ -44,6 +44,32 @@ Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'dmnde']
 Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
+class CenterDecoder(nn.Module):
+    name = 'ctrde'
+
+    def __init__(self):
+        super(CenterDecoder, self).__init__()
+        self.feature_length = 512
+
+        self.fc = nn.Sequential(
+            nn.Linear(self.feature_length, 64),
+            nn.ReLU(),
+            nn.Linear(64, 3),
+            nn.Sigmoid()
+        )
+
+        init.xavier_normal_(self.fc[-2].weight)
+
+    def __str__(self):
+        return f"CTRDE{version}"
+
+    def forward(self, x):
+        out = self.fc(x.view(-1, self.feature_length))
+        center = out[..., :2]
+        depth = out[..., -1]
+        return center, depth
+
+
 class ImageEncoder(nn.Module):
     name = 'imgen'
     
@@ -270,6 +296,98 @@ class GradientReversalLayer(Function):
         # Reverse the gradient by multiplying by -lambda
         grad_input = grad_output.neg() * lambda_
         return grad_input, None  # Return gradient for input, None for lambda
+    
+class TeacherTrainer(BasicTrainer):
+    def __init__(self,
+                 beta=0.5,
+                 recon_lossfunc=nn.BCEWithLogitsLoss(reduction='sum'),
+                 *args, **kwargs):
+        super(TeacherTrainer, self).__init__(*args, **kwargs)
+
+        self.modality = {'rimg', 'cimg', 'center', 'depth', 'tag', 'ctr', 'dpt', 'ind'}
+
+        self.beta = beta
+        self.recon_lossfunc = recon_lossfunc
+
+        self.loss_terms = ('LOSS', 'KL', 'R_RECON', 'C_RECON', 'CTR', 'DPT')
+        self.pred_terms = ('R_GT', 'C_GT', 
+                           'GT_DPT', 'GT_CTR', 
+                           'R_PRED', 'C_PRED', 
+                           'DPT_PRED', 'CTR_PRED', 
+                           'LAT', 'TAG', 'IND')
+        self.depth_loss = nn.MSELoss()
+        self.center_loss = nn.MSELoss()
+        
+        self.losslog = MyLossCTR(name=self.name,
+                           loss_terms=self.loss_terms,
+                           pred_terms=self.pred_terms,
+                           depth=True)
+        self.losslog.ctr = ['GT_CTR', 'CTR_PRED']
+        self.losslog.dpt = ['GT_DPT', 'DPT_PRED']
+        
+        self.teacher = Teacher(device=self.device)
+        self.models = {'imgen': self.teacher.imgen,
+                       'cimgde': self.teacher.cimgde,
+                       'rimgde': self.teacher.rimgde,
+                       'ctrde': self.teacher.ctrde
+                       }
+        
+    def kl_loss(self, mu, logvar):
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        return kl_loss
+
+    def calculate_loss(self, data):
+        cimg = torch.where(data['cimg'] > 0, 1., 0.)
+        rimg = data['rimg']
+        
+        ret = self.teacher(rimg)
+
+        kl_loss = self.kl_loss(ret['mu'], ret['logvar'])
+        r_recon_loss = self.recon_lossfunc(ret['rimage'], rimg) / ret['rimage'].shape[0]
+        c_recon_loss = self.recon_lossfunc(ret['cimage'], cimg) / ret['cimage'].shape[0]
+        vae_loss = kl_loss * self.beta + r_recon_loss + c_recon_loss
+
+        center_loss = self.center_loss(ret['center'], torch.squeeze(data['center']))
+        depth_loss = self.depth_loss(ret['depth'], torch.squeeze(data['depth']))
+        
+        loss = vae_loss + center_loss + depth_loss
+
+        TEMP_LOSS = {'LOSS': loss,
+              'KL': kl_loss,
+              'R_RECON': r_recon_loss,
+              'C_RECON': c_recon_loss,
+              'CTR': center_loss, 
+              'DPT': depth_loss
+              }
+        
+        PREDS = {'R_GT': rimg,
+                'C_GT': cimg,
+                'R_PRED': ret['rimage'],
+                'C_PRED': ret['cimage'],
+                'GT_CTR': data['center'],
+                'CTR_PRED': ret['center'],
+                'GT_DPT': data['depth'],
+                'DPT_PRED': ret['depth'],
+                'LAT': torch.cat((ret['mu'], ret['logvar']), -1),
+                'TAG': data['tag'],
+                'IND': data['ind']
+                }
+        
+        return PREDS, TEMP_LOSS
+
+    def plot_test(self, select_ind=None, select_num=8, autosave=False, **kwargs):
+        figs: dict = {}
+        self.losslog.generate_indices(select_ind, select_num)
+
+        figs.update(self.losslog.plot_predict(plot_terms=('R_GT', 'R_PRED', 'C_GT', 'C_PRED')))
+        figs.update(self.losslog.plot_latent(plot_terms={'LAT'}))
+        figs.update(self.losslog.plot_center())
+        # figs.update(self.loss.plot_test(plot_terms='all'))
+        # figs.update(self.loss.plot_tsne(plot_terms=('GT', 'LAT', 'PRED')))
+
+        if autosave:
+            for filename, fig in figs.items():
+                fig.savefig(f"{self.save_path}{filename}")
 
 
 class Student(nn.Module):
@@ -355,7 +473,8 @@ class StudentTrainer(BasicTrainer):
             'LOSS', 
             'MU', 'LOGVAR', 
             'LATENT', 
-            'FEATURE', 'FEATURE_MSE',
+            'FEATURE',
+            #'FEATURE_MSE',
             'IMG', 'CTR', 'DPT',
             #'DOM', 'DOM_ACC'
           )
