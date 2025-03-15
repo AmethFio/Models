@@ -297,6 +297,7 @@ class GradientReversalLayer(Function):
         grad_input = grad_output.neg() * lambda_
         return grad_input, None  # Return gradient for input, None for lambda
     
+
 class TeacherTrainer(BasicTrainer):
     def __init__(self,
                  beta=0.5,
@@ -332,6 +333,11 @@ class TeacherTrainer(BasicTrainer):
                        'ctrde': self.teacher.ctrde
                        }
         
+        self.latent_weight = 0.01
+        self.img_weight = 1.e-4
+        self.center_weight = 100.
+        self.depth_weight = 100.
+        
     def kl_loss(self, mu, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         return kl_loss
@@ -345,19 +351,23 @@ class TeacherTrainer(BasicTrainer):
         kl_loss = self.kl_loss(ret['mu'], ret['logvar'])
         r_recon_loss = self.recon_lossfunc(ret['rimage'], rimg) / ret['rimage'].shape[0]
         c_recon_loss = self.recon_lossfunc(ret['cimage'], cimg) / ret['cimage'].shape[0]
-        vae_loss = kl_loss * self.beta + r_recon_loss + c_recon_loss
+        vae_loss = kl_loss * self.beta * self.latent_weight
+        vae_loss += r_recon_loss * self.img_weight
+        vae_loss += c_recon_loss * self.img_weight
 
         center_loss = self.center_loss(ret['center'], torch.squeeze(data['center']))
         depth_loss = self.depth_loss(ret['depth'], torch.squeeze(data['depth']))
         
-        loss = vae_loss + center_loss + depth_loss
+        loss = vae_loss
+        loss += center_loss * self.center_weight
+        loss += depth_loss * self.depth_weight
 
         TEMP_LOSS = {'LOSS': loss,
-              'KL': kl_loss,
-              'R_RECON': r_recon_loss,
-              'C_RECON': c_recon_loss,
-              'CTR': center_loss, 
-              'DPT': depth_loss
+              'KL': kl_loss * self.beta * self.latent_weight,
+              'R_RECON': r_recon_loss * self.img_weight,
+              'C_RECON': c_recon_loss * self.img_weight,
+              'CTR': center_loss * self.center_weight, 
+              'DPT': depth_loss * self.depth_weight
               }
         
         PREDS = {'R_GT': rimg,
