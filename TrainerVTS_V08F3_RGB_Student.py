@@ -86,7 +86,8 @@ class ImageEncoder(nn.Module):
                 [128, 256, 3, 2, 1],
                 [256, 256, 3, 1, 1],
                 [256, 512, 3, 1, 1],
-                [512, 512, 1, 1, 0],]
+                #[512, 512, 1, 1, 0],
+                ]
         
         cnn = []
 
@@ -333,7 +334,7 @@ class TeacherTrainer(BasicTrainer):
                        'ctrde': self.teacher.ctrde
                        }
         
-        self.latent_weight = 0.01
+        self.latent_weight = 10.
         self.img_weight = 1.e-4
         self.center_weight = 100.
         self.depth_weight = 100.
