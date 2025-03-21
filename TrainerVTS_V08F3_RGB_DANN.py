@@ -479,26 +479,12 @@ class StudentTrainer(BasicTrainer):
         # differences = torch.abs(target_coord[:, None] - source_coord)  # Shape: (len(list1), len(list2))
         # indices = differences.argmin(dim=1)
         
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-        # source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
-        # target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
-        # cos_sim = torch.matmul(target_coord, source_coord.T)
-        # Clamp to ensure no floating-point errors push values outside [-1, 1]
-        # cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
-        # max_sim_values, indices = cos_sim.max(dim=1)
-=======
-=======
->>>>>>> Stashed changes
         source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
         target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
         cos_sim = torch.matmul(target_coord, source_coord.T)
         cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
         max_sim_values, indices = cos_sim.max(dim=1)
-<<<<<<< Updated upstream
->>>>>>> Stashed changes
-=======
->>>>>>> Stashed changes
+
         # sim_weight = 1 - max_sim_values
 
         # l1_diff = torch.cdist(target_coord, source_coord, p=1) 
@@ -580,7 +566,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
             
@@ -679,7 +665,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
             
@@ -746,7 +732,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
 
             # For Domain_classifier
@@ -782,7 +768,7 @@ class StudentTrainer(BasicTrainer):
             tag = target_data['tag']
             ind = target_data['ind']
             
-            source_ret = self.student(source_data['csi'], source_data['pd'], rimg)
+            source_ret = self.student(source_data['csi'], source_data['pd'], source_data['rimg'])
             target_ret = self.student(target_data['csi'], target_data['pd'], rimg)
             ret = target_ret
 
@@ -790,24 +776,21 @@ class StudentTrainer(BasicTrainer):
             source_coord = torch.cat((source_data['center'][..., 0].reshape(-1, 1), source_data['depth'].reshape(-1, 1)), dim=-1)
             target_coord = torch.cat((target_data['center'][..., 0].reshape(-1, 1), target_data['depth'].reshape(-1, 1)), dim=-1)
 
+            t_supervision = (source_ret['t_fea'], target_ret['s_fea'], 
+                             source_ret['t_mu'], source_ret['t_logvar'],
+                             target_ret['s_mu'], target_ret['s_logvar'])
+            
+            s_supervision = (source_ret['s_fea'], target_ret['s_fea'], 
+                             source_ret['s_mu'], source_ret['s_logvar'],
+                             target_ret['s_mu'], target_ret['s_logvar'])
+
             match_fea_loss, match_lat_loss = self.match_coord_loss(
                 source_coord, target_coord, 
-<<<<<<< Updated upstream
-<<<<<<< Updated upstream
-                source_ret['t_fea'], target_ret['s_fea'], 
-                source_ret['t_mu'], source_ret['t_logvar'],
-                target_ret['s_mu'], target_ret['s_logvar']
-=======
                 source_data['tag']['group'], target_data['tag']['group'],
                 source_data['tag']['segment'], taget_data['tag']['segment'],
                 *t_supervision
->>>>>>> Stashed changes
-=======
-                source_data['tag']['group'], target_data['tag']['group'],
-                source_data['tag']['segment'], taget_data['tag']['segment'],
-                *t_supervision
->>>>>>> Stashed changes
                 )
+            
             target_ctr_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             target_dpt_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
 
