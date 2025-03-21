@@ -447,32 +447,70 @@ class StudentTrainer(BasicTrainer):
         feature_loss = self.recon_lossfunc(feature_s, feature_t)
         return feature_loss
 
-    def match_coord_loss(self, source_coord, target_coord, source_fea, target_fea, source_mu, source_logvar, target_mu, target_logvar):
+    def match_group(self, source_group, target_group):
+        matches = {
+            0: [0, 2],
+            1: [1, 5],
+            2: [2, 0],
+            3: [3, 7],
+            4: [4, 6],
+            5: [5, 1],
+            6: [6, 4],
+            7: [7, 3]
+        }
+
+        return torch.tensor([s in matches[t] for s, t in zip(source_group, target_group)], dtype=source_group.dtype)
+
+    def match_segment(self, source_segment, target_segment):
+        return torch.tensor([s % 2 == t % 2 for s, t in zip(source_segment, target_segment)], dtype=source_group.dtype)
+
+    def weighted_loss(self, weight, est, gt):
+        return (self.recon_lossfunc(est, gt) * weight).sum() / weight.sum()
+
+    def match_coord_loss(self, 
+                        source_coord, target_coord,
+                        source_group, target_group,
+                        source_segment, target_segment,
+                        source_fea, target_fea, 
+                        source_mu, source_logvar, 
+                        target_mu, target_logvar):
 
         # Match by (x, d) coordinates
         # differences = torch.abs(target_coord[:, None] - source_coord)  # Shape: (len(list1), len(list2))
         # indices = differences.argmin(dim=1)
         
-        # source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
-        # target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
-        # cos_sim = torch.matmul(target_coord, source_coord.T)
-        # cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
-        # max_sim_values, indices = cos_sim.max(dim=1)
+        source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
+        target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
+        cos_sim = torch.matmul(target_coord, source_coord.T)
+        cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
+        max_sim_values, indices = cos_sim.max(dim=1)
+
         # sim_weight = 1 - max_sim_values
 
         # l1_diff = torch.cdist(target_coord, source_coord, p=1) 
         # max_sim_values, indices = l1_diff.min(dim=1)
         
-        l2_diff = torch.cdist(target_coord, source_coord, p=2) 
-        max_sim_values, indices = l2_diff.min(dim=1)
+        # l2_diff = torch.cdist(target_coord, source_coord, p=2) 
+        # max_sim_values, indices = l2_diff.min(dim=1)
 
         # Weigh the loss with cos_sim
-        # match_fea_loss = (self.recon_lossfunc(target_fea, source_fea[indices]) * sim_weight).sum() / sim_weight.sum()
-        # match_mu_loss = (self.recon_lossfunc(target_mu, source_mu[indices]) * sim_weight).sum() / sim_weight.sum()
-        # match_logvar_loss = (self.recon_lossfunc(target_logvar, source_logvar[indices]) * sim_weight).sum() / sim_weight.sum()
-        match_fea_loss = self.recon_lossfunc(target_fea, source_fea[indices])
-        match_mu_loss = self.recon_lossfunc(target_mu, source_mu[indices])
-        match_logvar_loss = self.recon_lossfunc(target_logvar, source_logvar[indices])
+        # match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
+        # match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
+        # match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
+
+        group_match = self.match_group(source_group[indices], target_group)
+        segment_match = self.match_segment(source_segment[indices], target_segment)
+        all_match = group_match * segment_match * 99 + torch.ones_like(group_match)  # weight 1 vs 100
+
+        # Weigh the loss with all_match
+        match_fea_loss = self.weighted_loss(all_match, target_fea, source_fea[indices])
+        match_mu_loss = self.weighted_loss(all_match, target_mu, source_mu[indices])
+        match_logvar_loss = self.weighted_loss(all_match, target_logvar, source_logvar[indices])
+
+        # match_fea_loss = self.recon_lossfunc(target_fea, source_fea[indices])
+        # match_mu_loss = self.recon_lossfunc(target_mu, source_mu[indices])
+        # match_logvar_loss = self.recon_lossfunc(target_logvar, source_logvar[indices])
+
         match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
 
         return match_fea_loss, match_kd_loss
@@ -748,8 +786,11 @@ class StudentTrainer(BasicTrainer):
 
             match_fea_loss, match_lat_loss = self.match_coord_loss(
                 source_coord, target_coord, 
-                *s_supervision
+                source_data['tag']['group'], target_data['tag']['group'],
+                source_data['tag']['segment'], taget_data['tag']['segment'],
+                *t_supervision
                 )
+            
             target_ctr_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             target_dpt_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
 

@@ -129,7 +129,7 @@ class MyDataset(Dataset):
         """
         # Tag codes
         ret: dict = {}
-        tag =  self.label.iloc[index][['env', 'subject', 'img_inds']]
+        tag =  self.label.iloc[index][['env', 'subject', 'group', 'segment', 'img_inds']]
         tag['env'] = self.env_code[tag['env']]
         tag['subject'] = self.subject_code[tag['subject']]
         ret['tag'] = tag.to_numpy().astype(int)
