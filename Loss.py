@@ -277,7 +277,7 @@ class MyLossLog:
             for j in range(len(axes)):
                 img = axes[j].imshow(self.preds[item][self.select_inds[j]], vmin=0, vmax=1)
                 axes[j].axis('off')
-                axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}", fontweight="bold")
+                axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}")
             subfigs[i].colorbar(img, ax=axes, shrink=0.8)
         plt.show()
         
@@ -303,7 +303,7 @@ class MyLossLog:
             if ylim:
                 axes[j].set_ylim(*ylim)
 
-            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}", fontweight="bold")
+            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}")
             axes[j].grid()
 
         axes[0].legend()
@@ -362,7 +362,7 @@ class MyLossBBX(MyLossLog):
         for j, ind in enumerate(self.select_inds):
             axes[j].set_xlim([0, 226])
             axes[j].set_ylim([0, 128])
-            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}", fontweight="bold")
+            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}")
             x1, y1, x2, y2 = self.preds['GT_BBX'][ind]
             x = int(x1 * 226)
             y = int(y1 * 128)
@@ -420,7 +420,7 @@ class MyLossCTR(MyLossLog):
             
             axes[j].set_xlim([0, 226])
             axes[j].set_ylim([0, 128])
-            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}", fontweight="bold")
+            axes[j].set_title(f"{'-'.join(map(str, map(int, samples[j])))}")
             
             for ci, ctr in enumerate(self.ctr):
                 x, y = self.preds[ctr][ind]
