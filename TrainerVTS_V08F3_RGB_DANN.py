@@ -480,6 +480,7 @@ class StudentTrainer(BasicTrainer):
         # indices = differences.argmin(dim=1)
         
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         # source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
         # target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
         # cos_sim = torch.matmul(target_coord, source_coord.T)
@@ -487,11 +488,16 @@ class StudentTrainer(BasicTrainer):
         # cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
         # max_sim_values, indices = cos_sim.max(dim=1)
 =======
+=======
+>>>>>>> Stashed changes
         source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
         target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
         cos_sim = torch.matmul(target_coord, source_coord.T)
         cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
         max_sim_values, indices = cos_sim.max(dim=1)
+<<<<<<< Updated upstream
+>>>>>>> Stashed changes
+=======
 >>>>>>> Stashed changes
         # sim_weight = 1 - max_sim_values
 
@@ -787,9 +793,15 @@ class StudentTrainer(BasicTrainer):
             match_fea_loss, match_lat_loss = self.match_coord_loss(
                 source_coord, target_coord, 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
                 source_ret['t_fea'], target_ret['s_fea'], 
                 source_ret['t_mu'], source_ret['t_logvar'],
                 target_ret['s_mu'], target_ret['s_logvar']
+=======
+                source_data['tag']['group'], target_data['tag']['group'],
+                source_data['tag']['segment'], taget_data['tag']['segment'],
+                *t_supervision
+>>>>>>> Stashed changes
 =======
                 source_data['tag']['group'], target_data['tag']['group'],
                 source_data['tag']['segment'], taget_data['tag']['segment'],
