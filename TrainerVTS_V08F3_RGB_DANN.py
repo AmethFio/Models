@@ -448,24 +448,39 @@ class StudentTrainer(BasicTrainer):
         return feature_loss
 
     def match_group(self, source_group, target_group):
-        matches = {
-            0: [0, 2],
-            1: [1, 5],
-            2: [2, 0],
-            3: [3, 7],
-            4: [4, 6],
-            5: [5, 1],
-            6: [6, 4],
-            7: [7, 3]
-        }
+        # matches = {
+        #     0: [0, 2],
+        #     1: [1, 5],
+        #     2: [2, 0],
+        #     3: [3, 7],
+        #     4: [4, 6],
+        #     5: [5, 1],
+        #     6: [6, 4],
+        #     7: [7, 3]
+        # }
 
-        return torch.tensor([s in matches[t] for s, t in zip(source_group, target_group)], dtype=source_group.dtype)
+        # return torch.tensor([s in matches[t] for s, t in zip(source_group, target_group)], dtype=source_group.dtype)
+
+        matches = torch.tensor([
+            [0, 2], [1, 5], [2, 0], [3, 7],
+            [4, 6], [5, 1], [6, 4], [7, 3]
+        ], device=source_group.device)
+
+        # Get valid matches for each element in target_group
+        valid_matches = matches[target_group.to(torch.long)]  # Shape: (N, 2)
+
+        # Check if each source_group value exists in corresponding valid_matches
+        ret = (source_group[:, None] == valid_matches).any(dim=1)
+
+        return ret
 
     def match_segment(self, source_segment, target_segment):
-        return torch.tensor([s % 2 == t % 2 for s, t in zip(source_segment, target_segment)], dtype=source_group.dtype)
+        return torch.tensor([s % 2 == t % 2 for s, t in zip(source_segment, target_segment)], 
+                            dtype=source_segment.dtype, 
+                            device=source_segment.device)
 
     def weighted_loss(self, weight, est, gt):
-        return (self.recon_lossfunc(est, gt) * weight).sum() / weight.sum()
+        return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
 
     def match_coord_loss(self, 
                         source_coord, target_coord,
@@ -500,7 +515,8 @@ class StudentTrainer(BasicTrainer):
 
         group_match = self.match_group(source_group[indices], target_group)
         segment_match = self.match_segment(source_segment[indices], target_segment)
-        all_match = group_match * segment_match * 99 + torch.ones_like(group_match)  # weight 1 vs 100
+        all_match = group_match * segment_match * 99 + torch.ones_like(group_match, device=self.device)  # weight 1 vs 100
+        # all_match = segment_match * 99 + torch.ones_like(segment_match, device=self.device)  # weight 1 vs 100
 
         # Weigh the loss with all_match
         match_fea_loss = self.weighted_loss(all_match, target_fea, source_fea[indices])
@@ -786,8 +802,8 @@ class StudentTrainer(BasicTrainer):
 
             match_fea_loss, match_lat_loss = self.match_coord_loss(
                 source_coord, target_coord, 
-                source_data['tag']['group'], target_data['tag']['group'],
-                source_data['tag']['segment'], taget_data['tag']['segment'],
+                source_data['tag'][..., 2], target_data['tag'][..., 2],
+                source_data['tag'][..., 3], target_data['tag'][..., 3],
                 *t_supervision
                 )
             
