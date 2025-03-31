@@ -221,7 +221,6 @@ class ImageDecoder(nn.Module):
         
         self.cnn = nn.Sequential(*cnn, self.active_func)
 
-        # 6 * 16 * 16
         # 512 * 16 * 16
         # 256 * 16 * 16
         # 256 * 32 * 32
