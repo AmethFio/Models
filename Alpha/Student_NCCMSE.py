@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as F
+
+
 # from torchvision.ops import complete_box_iou_loss
 import numpy as np
 import matplotlib.pyplot as plt
@@ -302,8 +305,8 @@ class StudentTrainer(BasicTrainer):
         
         self.latent_weight = 20
         self.img_weight = 1.e-4
-        self.center_weight = 1.e-3
-        self.depth_weight = 10.
+        self.center_weight = 10.
+        self.depth_weight = 100.
         self.feature_weight = 1.
         
     def data_preprocess(self, mode, data2):
