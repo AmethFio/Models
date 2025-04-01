@@ -1,6 +1,4 @@
 import torch
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 try:
     from torch.amp import autocast, GradScaler
     _autocast_arg = {'device_type': 'cuda'}
@@ -12,7 +10,6 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from tqdm.notebook import tqdm
-from IPython.display import clear_output
 
 from Loss import MyLossLog
 from misc import timer, file_finder

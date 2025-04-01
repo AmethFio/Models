@@ -494,6 +494,7 @@ class StudentTrainer(BasicTrainer):
         self.sample_mse = nn.MSELoss(reduction='none')
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.adv = nn.CrossEntropyLoss()
+        self.nccmse = NCC_MSE_Loss()
 
         self.loss_terms = (
             'LOSS', 
