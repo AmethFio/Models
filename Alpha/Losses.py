@@ -1,0 +1,142 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Function
+import numpy as np
+
+class NCCMSELoss:
+    """
+    Normalized Cross Correlation-MSE Loss
+    """
+    def __init__(self, dims=-1, lambda_ncc=0.7, epsilon=1e-10, reduction=None):
+        self.lambda_ncc = lambda_ncc
+        self.epsilon = epsilon
+        self.dims = dims
+        self.reduction = reduction
+        # FOR VECTORS: dims=-1
+        # FOR IMAGES: dims=(1, 2, 3)
+
+    def ncc(self, pred, target):
+        """Compute batch-wise Normalized Cross-Correlation (NCC)."""
+        pred = pred.float()
+        target = target.float()
+
+        mean_pred = torch.mean(pred, dim=self.dims, keepdim=True)
+        mean_target = torch.mean(target, dim=self.dims, keepdim=True)
+
+        numerator = torch.sum((pred - mean_pred) * (target - mean_target), dim=self.dims)
+        denominator = torch.sqrt(
+            torch.sum((pred - mean_pred) ** 2, dim=self.dims) * 
+            torch.sum((target - mean_target) ** 2, dim=self.dims)
+        )
+
+        ncc_value = numerator / (denominator + self.epsilon)  # Avoid division by zero
+        return ncc_value.mean()
+
+    def mse(self, pred, target):
+        """Compute Mean Squared Error (MSE)."""
+        mse_loss = F.mse_loss(pred, target, reduction=self.reduction)
+        if self.reduction == 'sum':
+            mse_loss = mse_loss / pred.shape[0]
+        return mse_loss
+
+    def __call__(self, pred, target):
+        ncc_loss = 1 - self.ncc(pred, target)  # Convert NCC to loss
+        mse_loss = self.mse(pred, target)
+
+        # Combined loss: lambda * NCC + (1 - lambda) * MSE
+        total_loss = self.lambda_ncc * ncc_loss + (1 - self.lambda_ncc) * mse_loss
+        return total_loss
+
+
+class GradientReversalLayer(Function):
+    
+    @staticmethod
+    def forward(ctx, input, lambda_):
+        # Save lambda for later use in backward
+        ctx.lambda_ = lambda_
+        # Forward pass is identity, just return the input
+        return input.view_as(input)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # In the backward pass, retrieve lambda from ctx
+        lambda_ = ctx.lambda_
+        # Reverse the gradient by multiplying by -lambda
+        grad_input = grad_output.neg() * lambda_
+        return grad_input, None  # Return gradient for input, None for lambda
+
+
+class DANNLoss:
+    """
+    Domain Adversarial Loss
+    """
+    def __init__(self, lambda_, max_iter=300, adv_loss=nn.CrossEntropyLoss()):
+        self.lambda_ = lambda_
+        self.max_iter = max_iter
+        self.grl = GradientReversalLayer
+        self.adv_loss = adv_loss
+
+    def calculate_lambda(self, current_ep):
+        # Sigmoid schedule for lambda: 2 / (1 + exp(-10 * p)) - 1
+        # where p is the proportion of iterations completed
+        p = current_ep / self.max_iter
+        lambda_value = 2 / (1 + np.exp(-10 * p)) - 1
+        self.lambda_ = min(lambda_value, 1)
+        return min(lambda_value, 1)
+
+    def __call__(self, critic, current_ep,
+                source_label, target_label, 
+                source_feature, target_feature, 
+                reverse_feature):
+
+        lambda_ = self.calculate_lambda() if reverse_feature else -1.
+
+        dann_features = target_feature if not source_feature else torch.cat(
+                        (source_feature, target_feature), dim=0)
+        
+        # REVERSING DEPENDS ON LAMBDA
+        dann_features = GradientReversalLayer.apply(dann_features, lambda_)
+    
+        domain_preds = critic(dann_features)
+
+        if source_label is not None:
+            domain_labels = torch.cat((source_label, 
+                target_label)).to(torch.int64).to(dann_features.device)
+        else:
+            domain_labels = target_label.to(torch.int64).to(dann_features.device)
+        
+        domain_loss = self.adv_loss(domain_preds, domain_labels)
+
+        with torch.no_grad():
+            domain_acc_preds = torch.argmax(domain_preds, dim=1)
+            domain_acc = torch.sum(domain_acc_preds == domain_labels) / domain_preds.shape[0]
+        
+        return domain_loss, domain_acc, domain_preds, domain_labels
+
+
+class PostCoordLoss:
+    """
+    Posterior Coordinate Loss
+    """
+    def __init__(self, mask_threshold=0.01, reduction=None):
+        self.mask_threshold = mask_threshold
+        self.mse = nn.MSELoss(reduction=reduction)
+
+    def __call__(self, rimg, gt_center, gt_depth):
+        mask = torch.where(rimg > self.mask_threshold, 1., 0.)
+        N, C, H, W = mask.shape
+        y_coords = torch.arange(H, device=mask.device).view(1, 1, H, 1)
+        x_coords = torch.arange(W, device=mask.device).view(1, 1, 1, W)
+
+        x_center = (x_coords * mask).sum(dim=[2, 3]) / mask.sum(dim=[2, 3])
+        y_center = (y_coords * mask).sum(dim=[2, 3]) / mask.sum(dim=[2, 3])
+
+        post_center = torch.stack((x_center, y_center), dim=-1)  # Shape: (N, 2)
+
+        post_depth = torch.mean(rimg[rimg != 0])
+
+        center_loss = self.mse(post_center, gt_center)
+        depth_loss = self.mse(post_depth, gt_depth)
+
+        return center_loss, depth_loss
