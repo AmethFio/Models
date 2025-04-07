@@ -10,6 +10,8 @@ from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from ModelVTS_v08F3 import *
 from Loss import MyLossLog, MyLossCTR
 
+from Alpha.Losses import NCCMSELoss
+
 from torch.autograd import Function
 
 version = 'V08F3'
@@ -289,6 +291,7 @@ class StudentTrainer(BasicTrainer):
         self.sample_mse = nn.MSELoss(reduction='none')
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.adv = nn.CrossEntropyLoss()
+        self.nccmse = NCCMSELoss()
 
         self.loss_terms = ('LOSS', 'MU', 'LOGVAR', 'LATENT', 'FEATURE', 'IMG', 'CTR', 'DPT', 'DOM', 'DOM_ACC', 'TG_LOSS', 'TG_FEA', 'TG_LAT', 'TG_CTR', 'TG_DPT')
         self.pred_terms = ('C_GT', 'R_GT',
@@ -530,6 +533,83 @@ class StudentTrainer(BasicTrainer):
         match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
 
         return match_fea_loss, match_kd_loss
+
+    def ncc_loss(self, source_shape, target_shape):
+        target_shape = target_shape.reshape(64, -1)
+        source_shape = source_shape.reshape(64, -1)
+
+        # Zero-mean
+        target_shape = target_shape - target_shape.mean(dim=1, keepdim=True)
+        source_shape = source_shape - source_shape.mean(dim=1, keepdim=True)
+
+        # Normalize (L2 norm)
+        target_shape_norm = target_shape / (target_shape.norm(dim=1, keepdim=True) + 1e-8)
+        source_shape_norm = source_shape / (source_shape.norm(dim=1, keepdim=True) + 1e-8)
+
+        # Compute cosine similarity = NCC (because both are zero-mean and L2-normalized)
+        ncc = torch.matmul(target_shape_norm, source_shape_norm.T)
+
+        return ncc
+
+    def match_coord_shape_loss(self, 
+                        source_coord, target_coord,
+                        source_shape, target_shape,
+                        source_fea, target_fea, 
+                        source_mu, source_logvar, 
+                        target_mu, target_logvar):
+
+        source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
+        target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
+        cos_sim = torch.matmul(target_coord, source_coord.T)
+        cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
+        max_sim_values, indices = cos_sim.max(dim=1)
+
+        ncc = self.ncc_loss(source_shape, target_shape)
+
+        max_sim_values, indices = ncc.max(dim=1)
+        sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+
+        match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
+        match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
+        match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
+
+        match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
+
+        return match_fea_loss, match_kd_loss
+
+    def match_shape_loss(self, 
+                        source_shape, target_shape,
+                        source_fea, target_fea, 
+                        source_mu, source_logvar, 
+                        target_mu, target_logvar):
+
+        # NCC Ver
+        # Flatten images to (N, C*H*W)
+        target_shape = target_shape.reshape(64, -1)
+        source_shape = source_shape.reshape(64, -1)
+
+        # Zero-mean
+        target_shape = target_shape - target_shape.mean(dim=1, keepdim=True)
+        source_shape = source_shape - source_shape.mean(dim=1, keepdim=True)
+
+        # Normalize (L2 norm)
+        target_shape_norm = target_shape / (target_shape.norm(dim=1, keepdim=True) + 1e-8)
+        source_shape_norm = source_shape / (source_shape.norm(dim=1, keepdim=True) + 1e-8)
+
+        # Compute cosine similarity = NCC (because both are zero-mean and L2-normalized)
+        ncc = torch.matmul(target_shape_norm, source_shape_norm.T)
+
+        max_sim_values, indices = ncc.max(dim=1)
+        sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+
+        match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
+        match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
+        match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
+
+        match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
+
+        return match_fea_loss, match_kd_loss
+
 
     def post_coord_loss(self, rimg, gt_center, gt_depth):
         mask = torch.where(rimg > 0.01, 1., 0.)
@@ -792,7 +872,7 @@ class StudentTrainer(BasicTrainer):
             source_coord = torch.cat((source_data['center'][..., 0].reshape(-1, 1), source_data['depth'].reshape(-1, 1)), dim=-1)
             target_coord = torch.cat((target_data['center'][..., 0].reshape(-1, 1), target_data['depth'].reshape(-1, 1)), dim=-1)
 
-            t_supervision = (source_ret['t_fea'], target_ret['s_fea'], 
+            t_supervision = (source_ret['t_fea'], target_ret['t_fea'], 
                              source_ret['t_mu'], source_ret['t_logvar'],
                              target_ret['s_mu'], target_ret['s_logvar'])
             
@@ -800,10 +880,21 @@ class StudentTrainer(BasicTrainer):
                              source_ret['s_mu'], source_ret['s_logvar'],
                              target_ret['s_mu'], target_ret['s_logvar'])
 
-            match_fea_loss, match_lat_loss = self.match_coord_loss(
+            # match_fea_loss, match_lat_loss = self.match_coord_loss(
+            #     source_coord, target_coord, 
+            #     source_data['tag'][..., 2], target_data['tag'][..., 2],
+            #     source_data['tag'][..., 3], target_data['tag'][..., 3],
+            #     *t_supervision
+            #     )
+
+            # match_fea_loss, match_lat_loss = self.match_shape_loss(
+            #     source_data['cimg'], target_data['cimg'], 
+            #     *t_supervision
+            #     )
+
+            match_fea_loss, match_lat_loss = self.match_coord_shape_loss(
                 source_coord, target_coord, 
-                source_data['tag'][..., 2], target_data['tag'][..., 2],
-                source_data['tag'][..., 3], target_data['tag'][..., 3],
+                source_data['cimg'], target_data['cimg'], 
                 *t_supervision
                 )
             
