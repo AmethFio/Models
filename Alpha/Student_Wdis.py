@@ -11,9 +11,9 @@ sys.path.append('..')
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
 
-from StandardTeacher import Teacher
-from StandardStudent import Student
-from Wasserstein import WGANCritic, WGANLoss
+from Structure.StandardTeacher import Teacher
+from Structure.StandardStudent import Student
+from Alpha.Wasserstein import WGANCritic, WGANLoss
 
 feature_length = 512 * 7
 steps = 25
@@ -87,11 +87,11 @@ class StudentTrainer(BasicTrainer):
                                 'Domain_classifier': TrainingPhase(name='Domain_classifier',
                                                        train_module=Domain_classifier_train,
                                                        eval_module=Domain_classifier_eval,
-                                                       loss='DOM',
+                                                       loss='WDIS',
                                                        tolerance=5,
                                                        conditioned_update=False,
                                                        verbose=True,
-                                                       plot_terms=('DOM', 'DOM_ACC')
+                                                       plot_terms=('WDIS', 'WGEN')
                                                        )
                                 }
 
@@ -162,7 +162,7 @@ class StudentTrainer(BasicTrainer):
         center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(ctr))
         depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(dpt))
         image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
-        wgen_loss = self.wganloss(None, None, wscore, 'g')
+        wgen_loss = self.wganloss(self.models['dmnde'], None, ret['s_z'], 'g')
 
         loss = image_loss * self.img_weight +\
             center_loss * self.center_weight +\

@@ -36,7 +36,7 @@ class WGANLoss:
         interpolated = alpha * source_samples + (1 - alpha) * target_samples
         interpolated.requires_grad_(True)
 
-        critic_interpolated = self.critic(interpolated)
+        critic_interpolated = critic(interpolated)
 
         grad_outputs = torch.ones_like(critic_interpolated)
         gradients = torch.autograd.grad(
@@ -50,9 +50,9 @@ class WGANLoss:
 
         gradients = gradients.view(batch_size, -1)
         gp = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-        return gp * self.lambda_
+        return gp * self.lambda_gp
 
-    def critic(self, critic_target, critic_source, gp):
+    def discrinimative(self, critic_target, critic_source, gp):
         loss_critic = critic_target.mean() - critic_source.mean() + gp
         return loss_critic
 
@@ -65,7 +65,7 @@ class WGANLoss:
             gp = self.gradient_penalty(critic, source_samples, target_samples)
             critic_source = critic(source_samples)
             critic_target = critic(target_samples)
-            loss = self.critic(critic_target, critic_source, gp)
+            loss = self.discrinimative(critic_target, critic_source, gp)
         elif mode == 'g':
             critic_target = critic(target_samples)
             loss = self.generative(critic_target)

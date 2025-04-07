@@ -5,7 +5,7 @@ sys.path.append('..')
 from ModelVTS_v08F3 import *
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
-from StandardTeacher import Teacher
+from Structure.StandardTeacher import Teacher
 
 class Student(nn.Module):
 
