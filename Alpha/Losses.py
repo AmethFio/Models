@@ -4,6 +4,32 @@ import torch.nn.functional as F
 from torch.autograd import Function
 import numpy as np
 
+
+class NCCLoss:
+    """
+    Normalized Cross Correlation Loss
+    """
+    def __init__(self):
+        self.eps = 1e-8
+
+    def __forward__(self, source_shape, target_shape):
+
+        target_shape = target_shape.reshape(64, -1)
+        source_shape = source_shape.reshape(64, -1)
+
+        # Zero-mean
+        target_shape = target_shape - target_shape.mean(dim=1, keepdim=True)
+        source_shape = source_shape - source_shape.mean(dim=1, keepdim=True)
+
+        # Normalize (L2 norm)
+        target_shape_norm = target_shape / (target_shape.norm(dim=1, keepdim=True) + self.eps)
+        source_shape_norm = source_shape / (source_shape.norm(dim=1, keepdim=True) + self.eps)
+
+        ncc = torch.matmul(target_shape_norm, source_shape_norm.T)
+
+        return ncc
+        
+
 class NCCMSELoss:
     """
     Normalized Cross Correlation-MSE Loss
