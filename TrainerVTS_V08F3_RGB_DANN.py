@@ -292,6 +292,7 @@ class StudentTrainer(BasicTrainer):
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.adv = nn.CrossEntropyLoss()
         self.nccmse = NCCMSELoss()
+        self.shape_only = True
 
         self.loss_terms = ('LOSS', 'MU', 'LOGVAR', 'LATENT', 'FEATURE', 'IMG', 'CTR', 'DPT', 'DOM', 'DOM_ACC', 'TG_LOSS', 'TG_FEA', 'TG_LAT', 'TG_CTR', 'TG_DPT')
         self.pred_terms = ('C_GT', 'R_GT',
@@ -370,13 +371,13 @@ class StudentTrainer(BasicTrainer):
                                 }
 
         
-        self.latent_weight = 0.1
+        self.latent_weight = 10
         self.rimg_weight = 1.e-4
         self.center_weight = 40.
         self.depth_weight = 50.
         self.feature_weight = 10
 
-        self.domain_weight = 0.01
+        self.domain_weight = 1
 
         self.target_fea_weight = 10.
         self.target_lat_weight = 20
@@ -562,11 +563,11 @@ class StudentTrainer(BasicTrainer):
         target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
         cos_sim = torch.matmul(target_coord, source_coord.T)
         cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
-        max_sim_values, indices = cos_sim.max(dim=1)
+        _, indices = cos_sim.max(dim=1)
 
-        ncc = self.ncc_loss(source_shape, target_shape)
+        ncc = self.ncc_loss(source_shape[indices], target_shape)
 
-        max_sim_values, indices = ncc.max(dim=1)
+        max_sim_values, _ = ncc.max(dim=1)
         sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
 
         match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
@@ -585,8 +586,8 @@ class StudentTrainer(BasicTrainer):
 
         # NCC Ver
         # Flatten images to (N, C*H*W)
-        target_shape = target_shape.reshape(64, -1)
-        source_shape = source_shape.reshape(64, -1)
+        target_shape = target_shape.reshape(target_shape.shape[0], -1)
+        source_shape = source_shape.reshape(source_shape.shape[0], -1)
 
         # Zero-mean
         target_shape = target_shape - target_shape.mean(dim=1, keepdim=True)
@@ -891,12 +892,17 @@ class StudentTrainer(BasicTrainer):
             #     source_data['cimg'], target_data['cimg'], 
             #     *t_supervision
             #     )
-
-            match_fea_loss, match_lat_loss = self.match_coord_shape_loss(
-                source_coord, target_coord, 
-                source_data['cimg'], target_data['cimg'], 
-                *t_supervision
-                )
+            if self.shape_only:
+                match_fea_loss, match_lat_loss = self.match_shape_loss(
+                    source_data['cimg'], target_data['cimg'], 
+                    *t_supervision
+                    )
+            else:
+                match_fea_loss, match_lat_loss = self.match_coord_shape_loss(
+                    source_coord, target_coord, 
+                    source_data['cimg'], target_data['cimg'], 
+                    *t_supervision
+                    )
             
             target_ctr_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             target_dpt_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
