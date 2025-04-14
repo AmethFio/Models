@@ -18,8 +18,8 @@ from Wasserstein import WGANCritic, WGANLoss
 feature_length = 512 * 7
 steps = 25
 
-Feature_extractor_train = ['csien']
-Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'dmnde']
+Feature_extractor_train = ['csien', 'dmnde']
+Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde']
 Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
