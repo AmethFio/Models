@@ -14,8 +14,8 @@ class NCCLoss:
 
     def __forward__(self, source_shape, target_shape):
 
-        target_shape = target_shape.reshape(64, -1)
-        source_shape = source_shape.reshape(64, -1)
+        target_shape = target_shape.reshape(target_shape.shape[0], -1)
+        source_shape = source_shape.reshape(source_shape.shape[0], -1)
 
         # Zero-mean
         target_shape = target_shape - target_shape.mean(dim=1, keepdim=True)
@@ -166,3 +166,28 @@ class PostCoordLoss:
         depth_loss = self.mse(post_depth, gt_depth)
 
         return center_loss, depth_loss
+
+
+class MMDLoss:
+    def __init__(self, sigma=1.0):
+        self.sigme = sigma
+
+    def gaussian_kernel(self, x, y):
+        x = x.unsqueeze(1)  # (n, 1, d)
+        y = y.unsqueeze(0)  # (1, m, d)
+        dist = ((x - y) ** 2).sum(2)
+        return torch.exp(-dist / (2 * self.sigma ** 2))
+
+    def __call__(self, x, y):
+        xx = self.gaussian_kernel(x, x)
+        yy = self.gaussian_kernel(y, y)
+        xy = self.gaussian_kernel(x, y)
+        
+        m = x.size(0)
+        n = y.size(0)
+
+        loss = (xx.sum() - xx.diag().sum()) / (m * (m - 1)) \
+             + (yy.sum() - yy.diag().sum()) / (n * (n - 1)) \
+             - 2 * xy.mean()
+
+        return loss
