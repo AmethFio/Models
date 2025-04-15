@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from Trainer import BasicTrainer
-from Model import *
+from Models.Structure.Model import *
 from Loss import MyLossLog, MyLossCTR
 
 version = 'V08H1'

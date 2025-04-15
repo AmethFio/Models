@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
-from ModelVTS_v08F3 import *
+from Models.Structure.Model import *
 from Loss import MyLossLog, MyLossCTR
 
 version = 'V08F3'

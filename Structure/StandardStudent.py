@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import sys
 sys.path.append('..')
-from ModelVTS_v08F3 import *
+from Models.Structure.Model import *
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
 from StandardTeacher import Teacher

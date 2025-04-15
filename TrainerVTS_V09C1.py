@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from Trainer import BasicTrainer
-from Model import *
+from Models.Structure.Model import *
 from Loss import MyLossLog, MyLossBBX2
 
 version = 'V09C1'

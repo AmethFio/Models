@@ -5,7 +5,7 @@ import numpy as np
 import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossGAN
-from Model import *
+from Models.Structure.Model import *
 import torch.nn.functional as F
 
 

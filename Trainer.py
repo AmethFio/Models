@@ -683,7 +683,7 @@ class BasicTrainer:
             file_path = model_files.get(model_name)
             if file_path:
                 hit = True
-                checkpoint = torch.load(file_path, map_location='cpu')
+                checkpoint = torch.load(file_path, map_location='cpu', weights_only=False)
                 if 'model_state_dict' in checkpoint:
                     model.load_state_dict(checkpoint['model_state_dict'])
                 else:

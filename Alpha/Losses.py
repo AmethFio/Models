@@ -140,3 +140,41 @@ class PostCoordLoss:
         depth_loss = self.mse(post_depth, gt_depth)
 
         return center_loss, depth_loss
+
+
+class PairwiseIoU:
+    def __init__(self, threshold=0.5, eps=1e-6):
+        self.threshold = threshold
+        self.eps = eps
+
+    def __call__(self, pred, target):
+        """
+        Computes pairwise IoU between two sets of binary masks.
+
+        Args:
+            group_a: Tensor of shape (m, H, W) - first group of masks
+            group_b: Tensor of shape (n, H, W) - second group of masks
+            eps: Small epsilon to avoid division by zero
+
+        Returns:
+            iou_matrix: Tensor of shape (n, m) with IoU between each b_i and a_j
+        """
+
+        # Flatten masks to (m, H*W) and (n, H*W)
+        a_flat = pred.view(pred.shape[0], -1).float()
+        b_flat = target.view(target.shape[0], -1).float()
+
+        # Compute intersection: (n, m)
+        intersection = torch.matmul(b_flat, a_flat.T)
+
+        # Compute areas
+        area_a = a_flat.sum(dim=1)  # (m,)
+        area_b = b_flat.sum(dim=1)  # (n,)
+
+        # Compute union: (n, m)
+        union = area_a.unsqueeze(0) + area_b.unsqueeze(1) - intersection
+
+        # Compute IoU
+        iou = (intersection + self.eps) / (union + self.eps)
+        return iou
+    
