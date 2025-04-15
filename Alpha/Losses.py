@@ -168,7 +168,6 @@ class PostCoordLoss:
         return center_loss, depth_loss
 
 
-<<<<<<< HEAD
 class PairwiseIoU:
     def __init__(self, threshold=0.5, eps=1e-6):
         self.threshold = threshold
@@ -205,7 +204,6 @@ class PairwiseIoU:
         iou = (intersection + self.eps) / (union + self.eps)
         return iou
     
-=======
 class MMDLoss:
     def __init__(self, sigma=1.0):
         self.sigme = sigma
@@ -229,4 +227,3 @@ class MMDLoss:
              - 2 * xy.mean()
 
         return loss
->>>>>>> 19c9b0b0eb76c0702bd55656b6358331c9e5b7b2

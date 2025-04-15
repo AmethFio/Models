@@ -12,7 +12,7 @@ from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
 
 from StandardTeacher import Teacher
-from tandardStudent import Student
+from StandardStudent import Student
 from Wasserstein import WGANCritic, WGANLoss
 
 feature_length = 512 * 7
