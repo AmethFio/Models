@@ -5,7 +5,7 @@ from torch.autograd import Function
 import numpy as np
 
 
-class NCCLoss:
+class NCC:
     """
     Normalized Cross Correlation Loss
     """
@@ -34,7 +34,7 @@ class NCCMSELoss:
     """
     Normalized Cross Correlation-MSE Loss
     """
-    def __init__(self, dims=-1, lambda_ncc=0.7, epsilon=1e-10, reduction=None):
+    def __init__(self, dims=-1, lambda_ncc=0.7, epsilon=1e-10, reduction='none'):
         self.lambda_ncc = lambda_ncc
         self.epsilon = epsilon
         self.dims = dims
@@ -63,7 +63,7 @@ class NCCMSELoss:
         """Compute Mean Squared Error (MSE)."""
         mse_loss = F.mse_loss(pred, target, reduction=self.reduction)
         if self.reduction == 'sum':
-            mse_loss = mse_loss / pred.shape[0]
+            mse_loss /= pred.shape[0]
         return mse_loss
 
     def __call__(self, pred, target):
@@ -206,7 +206,7 @@ class PairwiseIoU:
     
 class MMDLoss:
     def __init__(self, sigma=1.0):
-        self.sigme = sigma
+        self.sigma = sigma
 
     def gaussian_kernel(self, x, y):
         x = x.unsqueeze(1)  # (n, 1, d)
@@ -226,4 +226,4 @@ class MMDLoss:
              + (yy.sum() - yy.diag().sum()) / (n * (n - 1)) \
              - 2 * xy.mean()
 
-        return loss
+        return loss * 1.e4

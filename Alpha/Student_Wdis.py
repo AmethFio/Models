@@ -11,8 +11,8 @@ sys.path.append('..')
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
 
-from StandardTeacher import Teacher
-from StandardStudent import Student
+from Structure.StandardTeacher import Teacher
+from Structure.StandardStudent import Student
 from Wasserstein import WGANCritic, WGANLoss
 
 feature_length = 512 * 7

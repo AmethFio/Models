@@ -15,8 +15,8 @@ from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog, MyLossCTR
 from Losses import NCCMSELoss
 
-from StandardTeacher import Teacher
-from StandardStudent import Student, StudentTrainer
+from Structure.StandardTeacher import Teacher
+from Structure.StandardStudent import Student, StudentTrainer
 
 feature_length = 512 * 7
 steps = 25
