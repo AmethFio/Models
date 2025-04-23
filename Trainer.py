@@ -104,6 +104,7 @@ class EarlyStopping:
 
 class TrainingPhase:
     def __init__(self,
+                lossfunc = None,
                  name = None,
                  train_module='all',
                  eval_module=[],
@@ -121,6 +122,7 @@ class TrainingPhase:
                  **kwargs):
         
         self.name = name
+        self.lossfunc = lossfunc
         self.loss = loss
         self.optimizer_def = optimizer
         self.optimizer = None
@@ -138,7 +140,7 @@ class TrainingPhase:
         # e.g. freeze_params = {'csien': ['fc_mu', 'fc_logvar']}
         
         self.tolerance = tolerance
-        self.current_best = float("inf")
+        self.current_best = None
         self.lr = lr
         self.lr_decay_rate = 0.5
         self.conditioned_update = conditioned_update
@@ -152,7 +154,7 @@ class TrainingPhase:
         self.plot_terms = plot_terms
         self.kwargs = kwargs
     
-    def __call__(self, flag, models, data, calculate_loss):
+    def __call__(self, flag, models, data):
         
         def update(TMP_LOSS):
             if torch.isnan(TMP_LOSS[self.loss]):
@@ -200,7 +202,7 @@ class TrainingPhase:
             for i in range(self.tolerance):
                 # Perform loss calculation
                 with autocast(**_autocast_arg):
-                    PREDS, TMP_LOSS = calculate_loss(data, **self.loss_arg)
+                    PREDS, TMP_LOSS = self.lossfunc(data, **self.loss_arg)
                 
                 # Optionally update based on the loss
                 if not self.conditioned_update:
@@ -211,10 +213,13 @@ class TrainingPhase:
                     progress_bar.set_description(f" {self.name} phase: iter {i + 1}/{self.tolerance}")
                     progress_bar.set_postfix({self.loss: f"{TMP_LOSS[self.loss].item():.4f}"})
                     progress_bar.update(1)
+                
+                if self.current_best is None:
+                    self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
 
                 # Check for improvement in the loss
-                if TMP_LOSS[self.loss] < self.current_best:
-                    self.current_best = TMP_LOSS[self.loss]
+                if np.abs(TMP_LOSS[self.loss].cpu().detach().numpy()) < np.abs(self.current_best):
+                    self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
                     # CONDITIONED UPDATE
                     if self.conditioned_update:
                         update(TMP_LOSS)
@@ -260,7 +265,8 @@ class TrainingPhase:
         
         
 class ValidationPhase:
-    def __init__(self, name, loader='valid', best_loss='LOSS', loss_arg={}, plot_terms='all'):
+    def __init__(self, lossfunc, name=None, loader='valid', best_loss='LOSS', loss_arg={}, plot_terms='all'):
+        self.lossfunc = lossfunc
         self.name = name
         self.loader = loader
         self.best_loss = best_loss
@@ -270,10 +276,10 @@ class ValidationPhase:
         self.num_batches = None
         self.plot_terms = plot_terms
         
-    def __call__(self, models, data, calculate_loss):
+    def __call__(self, models, data):
 
         with torch.no_grad():
-            PREDS, TMP_LOSS = calculate_loss(data, **self.loss_arg)      
+            PREDS, TMP_LOSS = self.lossfunc(data, **self.loss_arg)      
         return PREDS, TMP_LOSS
     
 
@@ -323,7 +329,6 @@ class BasicTrainer:
         self.loss_terms = ('loss1', 'loss2', '...')
         self.pred_terms = ('predict1', 'predict2', '...')
         self.losslog = MyLossLog(self.name, self.loss_terms, self.pred_terms)
-        self.calculate_losses = {'main': self.calculate_loss}
         
         self.current_epoch = 0
         self.early_stopping_trigger = 'main'
@@ -337,13 +342,14 @@ class BasicTrainer:
                  eval_module=None,
                  loss='LOSS',
                  lr=1.e-4,
+                 lossfunc=self.calculate_loss,
                  optimizer=torch.optim.Adam,
                  scaler=GradScaler(),
                  freeze_params=None)}
         
         self.valid_phases = {
-            'main': ValidationPhase(name='main'),
-            'default_test': ValidationPhase(name='test', loader='test'),
+            'main': ValidationPhase(name='main', lossfunc=self.calculate_loss),
+            'default_test': ValidationPhase(name='test', lossfunc=self.calculate_loss, loader='test'),
         }
         self.phase_condition = None
         
@@ -405,7 +411,7 @@ class BasicTrainer:
                 else:
                     phase_flag = True
                     
-                _, TMP_LOSS_ = phase(phase_flag, self.models, data_, self.calculate_losses[name])
+                _, TMP_LOSS_ = phase(phase_flag, self.models, data_)
                 TMP_LOSS.update(TMP_LOSS_)
 
             # Log loss
@@ -432,7 +438,7 @@ class BasicTrainer:
                 # Prepare data
                 data_ = self.data_preprocess('valid', data)
 
-                PREDS, TMP_LOSS = phase(self.models, data_, self.calculate_losses.get(phase.name, self.calculate_losses['main']))
+                PREDS, TMP_LOSS = phase(self.models, data_)
                 self.losslog('pred', PREDS)
                 
                 if phase.name != 'test' and self.current_epoch % 10 == 0 and idx == 1:

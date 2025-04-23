@@ -25,6 +25,7 @@ class WGANCritic(nn.Module):
 class WGANLoss:
     def __init__(self, lambda_gp=10):
         self.lambda_gp = lambda_gp
+        self.gp = None
 
     def gradient_penalty(self, critic, source_samples, target_samples):
         """
@@ -50,6 +51,7 @@ class WGANLoss:
 
         gradients = gradients.view(batch_size, -1)
         gp = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        self.gp = gp * self.lambda_gp
         return gp * self.lambda_gp
 
     def discrinimative(self, critic_target, critic_source, gp):

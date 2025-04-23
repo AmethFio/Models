@@ -18,8 +18,8 @@ from Wasserstein import WGANCritic, WGANLoss
 feature_length = 512 * 7
 steps = 25
 
-Feature_extractor_train = ['csien', 'dmnde']
-Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde']
+Feature_extractor_train = ['csien']
+Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'dmnde']
 Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
@@ -27,7 +27,6 @@ Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 class StudentTrainer(BasicTrainer):
     def __init__(self,
                  alpha=0.8,
-                 recon_lossfunc=nn.MSELoss(),
                  adapting=False,
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
@@ -35,11 +34,11 @@ class StudentTrainer(BasicTrainer):
         self.modality = {'cimg', 'rimg', 'csi', 'center', 'depth', 'pd', 'tag', 'ctr', 'dpt', 'ind'}
 
         self.alpha = alpha
-        self.recon_lossfunc = recon_lossfunc
+        self.mse = nn.MSELoss()
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.wganloss = WGANLoss()
 
-        self.loss_terms = ('LOSS', 'WDIS', 'WGEN', 'IMG', 'CTR', 'DPT')
+        self.loss_terms = ('LOSS', 'WDIS', 'WGEN', 'LAT', 'IMG', 'CTR', 'DPT')
         self.pred_terms = ('C_GT', 'R_GT',
                            'TR_PRED', 'R_PRED',
                            'TC_PRED', 'SC_PRED',
@@ -79,32 +78,29 @@ class StudentTrainer(BasicTrainer):
             'dmnde': WGANCritic().to(self.device)
                 }
 
-        self.training_phases = {'Feature_extractor': TrainingPhase(name='Feature_extractor',
-                                                        train_module=Feature_extractor_train,
-                                                        eval_module=Feature_extractor_eval,
-                                                        verbose=False
-                                                        ),
-                                'Domain_classifier': TrainingPhase(name='Domain_classifier',
+        self.training_phases = {
+                                'Discriminating': TrainingPhase(name='Discriminating',
+                                                        lossfunc=self.calculate_loss_dis,
                                                        train_module=Domain_classifier_train,
                                                        eval_module=Domain_classifier_eval,
                                                        loss='WDIS',
-                                                       tolerance=5,
-                                                       conditioned_update=False,
-                                                       verbose=True,
-                                                       plot_terms=('WDIS', 'WGEN')
-                                                       )
+                                                       tolerance=1,
+                                                       plot_terms=(['WDIS']),
+                                                       lr=1.e-4
+                                                       ),
+                                'Generating': TrainingPhase(name='Generating',
+                                                        lossfunc=self.calculate_loss,
+                                                        train_module=Feature_extractor_train,
+                                                        eval_module=Feature_extractor_eval,
+                                                        lr=1.e-4,
+                                                        plot_terms=('LOSS', 'WGEN', 'LAT', 'IMG', 'CTR', 'DPT')
+                                                        )
                                 }
-
-        self.calculate_losses = {
-            'main': self.calculate_loss_main,
-            'Feature_extractor': self.calculate_loss_fe,
-            'Domain_classifier': self.calculate_loss_da,
-        }
         
         self.latent_weight = 20
         self.img_weight = 1.e-4
-        self.center_weight = 1.e-3
-        self.depth_weight = 10.
+        self.center_weight = 50.
+        self.depth_weight = 100.
         self.feature_weight = 1.
         self.domain_weight = 1.
         
@@ -130,9 +126,15 @@ class StudentTrainer(BasicTrainer):
         else:
             return to_device(data2)
 
+    def phase_condition(self, name, epoch):
+        if name == 'Generating' and epoch % 5 != 0:
+            return False
+        else:
+            return True
+
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
-        mu_loss = self.nccmse(mu_s, mu_t)
-        logvar_loss = self.recon_lossfunc(logvar_s, logvar_t)
+        mu_loss = self.mse(mu_s, mu_t)
+        logvar_loss = self.mse(logvar_s, logvar_t)
         latent_loss = self.alpha * mu_loss + (1 - self.alpha) * logvar_loss
 
         return latent_loss, mu_loss, logvar_loss
@@ -141,11 +143,7 @@ class StudentTrainer(BasicTrainer):
         feature_loss = self.recon_lossfunc(feature_s, feature_t)
         return feature_loss
 
-    def phase_condition(self, name, epoch):
-        if name == 'Domain_classifier' and epoch % 5 != 0:
-            return False
-
-    def calculate_loss_fe(self, data):
+    def calculate_loss(self, data):
         
         cimg = torch.where(data['cimg'] > 0, 1., 0.)
         rimg = data['rimg']
@@ -158,9 +156,9 @@ class StudentTrainer(BasicTrainer):
         wscore = self.models['dmnde'](ret['s_z'])
         # 3-level loss
         # feature_loss = self.feature_loss(ret['s_fea'], ret['t_fea'])
-        # latent_loss, mu_loss, logvar_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
-        center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(ctr))
-        depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(dpt))
+        latent_loss, mu_loss, logvar_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
+        center_loss = self.mse(ret['s_center'], torch.squeeze(ctr))
+        depth_loss = self.mse(ret['s_depth'], torch.squeeze(dpt))
         image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
         wgen_loss = self.wganloss(self.models['dmnde'], None, ret['s_z'], 'g')
 
@@ -171,7 +169,8 @@ class StudentTrainer(BasicTrainer):
 
         TMP_LOSS = {
         'LOSS'   : loss,
-        'WGEN'   : wgen_loss + self.domain_weight,
+        'WGEN'   : wgen_loss * self.domain_weight,
+        'LAT'    : latent_loss * self.latent_weight, 
         'IMG'    : image_loss * self.img_weight,
         'CTR'    : center_loss * self.center_weight,
         'DPT'    : depth_loss * self.depth_weight
@@ -198,9 +197,10 @@ class StudentTrainer(BasicTrainer):
     
         return PREDS, TMP_LOSS
 
-    def calculate_loss_da(self, data):
+    def calculate_loss_dis(self, data):
         ret = self.student(data['csi'], data['pd'], data['rimg'])
         wdis_loss = self.wganloss(self.models['dmnde'], ret['t_z'], ret['s_z'], 'd')
+        wdis_loss *= self.domain_weight
 
         TMP_LOSS = {
         'WDIS': wdis_loss
@@ -208,14 +208,6 @@ class StudentTrainer(BasicTrainer):
 
         PREDS = {
         }
-        return PREDS, TMP_LOSS
-
-    def calculate_loss_main(self, data):
-        PREDS, TMP_LOSS = self.calculate_loss_fe(data)
-        PREDS_da, TMP_LOSS_da = self.calculate_loss_da(data)
-        PREDS.update(PREDS_da)
-        TMP_LOSS.update(TMP_LOSS_da)
-
         return PREDS, TMP_LOSS
 
     def plot_test(self, select_ind=None, select_num=8, autosave=False, **kwargs):
