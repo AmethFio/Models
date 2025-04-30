@@ -75,7 +75,7 @@ class StudentTrainer(BasicTrainer):
             'rimgde': self.teacher.rimgde,
             'ctrde': self.teacher.ctrde,
             'csien': self.student.csien,
-            'dmnde': WGANCritic().to(self.device)
+            'dmnde': WGANCritic(input_dim=256).to(self.device)
                 }
 
         self.training_phases = {
@@ -97,7 +97,7 @@ class StudentTrainer(BasicTrainer):
                                                         )
                                 }
         
-        self.latent_weight = 20
+        self.latent_weight = 0.2
         self.img_weight = 1.e-4
         self.center_weight = 50.
         self.depth_weight = 100.
@@ -127,7 +127,7 @@ class StudentTrainer(BasicTrainer):
             return to_device(data2)
 
     def phase_condition(self, name, epoch):
-        if name == 'Generating' and epoch % 5 != 0:
+        if name == 'Generating' and epoch % 5 != 0 and epoch != 1:
             return False
         else:
             return True
@@ -153,16 +153,16 @@ class StudentTrainer(BasicTrainer):
         ind = data['ind']
         
         ret = self.student(data['csi'], data['pd'], rimg)
-        wscore = self.models['dmnde'](ret['s_z'])
         # 3-level loss
         # feature_loss = self.feature_loss(ret['s_fea'], ret['t_fea'])
         latent_loss, mu_loss, logvar_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
         center_loss = self.mse(ret['s_center'], torch.squeeze(ctr))
         depth_loss = self.mse(ret['s_depth'], torch.squeeze(dpt))
         image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
-        wgen_loss = self.wganloss(self.models['dmnde'], None, ret['s_z'], 'g')
+        wgen_loss = self.wganloss(self.models['dmnde'], None, torch.cat((ret['s_mu'], ret['s_logvar']), -1), 'g')
 
-        loss = image_loss * self.img_weight +\
+        loss = latent_loss * self.latent_weight +\
+            image_loss * self.img_weight +\
             center_loss * self.center_weight +\
             depth_loss * self.depth_weight +\
             wgen_loss * self.domain_weight
@@ -199,7 +199,7 @@ class StudentTrainer(BasicTrainer):
 
     def calculate_loss_dis(self, data):
         ret = self.student(data['csi'], data['pd'], data['rimg'])
-        wdis_loss = self.wganloss(self.models['dmnde'], ret['t_z'], ret['s_z'], 'd')
+        wdis_loss = self.wganloss(self.models['dmnde'], torch.cat((ret['t_mu'], ret['t_logvar']), -1), torch.cat((ret['s_mu'], ret['s_logvar']), -1), 'd')
         wdis_loss *= self.domain_weight
 
         TMP_LOSS = {

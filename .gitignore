@@ -3,3 +3,5 @@ new.py
 __pycache__/
 .ipynb_checkpoints/
 Datasetting/__pycache__/
+Alpha/__pycache__/
+Structure/__pycache__/

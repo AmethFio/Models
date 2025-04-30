@@ -154,7 +154,7 @@ class TrainingPhase:
         self.plot_terms = plot_terms
         self.kwargs = kwargs
     
-    def __call__(self, flag, models, data):
+    def __call__(self, models, data):
         
         def update(TMP_LOSS):
             if torch.isnan(TMP_LOSS[self.loss]):
@@ -176,61 +176,60 @@ class TrainingPhase:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
                 self.optimizer.zero_grad()
+
+        # SET TRAINABLE PARAMS & LEARNING RATE
+        if not self.optimizer:
+            self.optimizer = self.optimizer_def(self.set_params(models), self.lr, 
+                                                amsgrad=self.kwargs.get('amsgrad', False))
+        else:
+            _ = self.set_params(models)
         
-        if flag:
-            # SET TRAINABLE PARAMS & LEARNING RATE
-            if not self.optimizer:
-                self.optimizer = self.optimizer_def(self.set_params(models), self.lr, 
-                                                    amsgrad=self.kwargs.get('amsgrad', False))
-            else:
-                _ = self.set_params(models)
+        self.train_mode(models)
+        
+        progress_bar = None
+        if self.verbose:
+            bar_format = '{desc}{percentage:3.0f}%|{bar}|[{postfix}]'
+            progress_bar = tqdm(total=self.tolerance, dynamic_ncols=True, bar_format=bar_format)
+                
+        if not self.show_trainable_params:
+            for key, model in models.items():
+                for name, param in model.named_parameters():
+                    if param.requires_grad:
+                        print(f"{self.name} {key} {name}: requires_grad={param.requires_grad}")
+            self.show_trainable_params = True
+        
+        for i in range(self.tolerance):
+            # Perform loss calculation
+            with autocast(**_autocast_arg):
+                PREDS, TMP_LOSS = self.lossfunc(data, **self.loss_arg)
             
-            self.train_mode(models)
-            
-            progress_bar = None
+            # Optionally update based on the loss
+            if not self.conditioned_update:
+                update(TMP_LOSS)
+
+            # Handle progress bar updates
             if self.verbose:
-                bar_format = '{desc}{percentage:3.0f}%|{bar}|[{postfix}]'
-                progress_bar = tqdm(total=self.tolerance, dynamic_ncols=True, bar_format=bar_format)
-                    
-            if not self.show_trainable_params:
-                for key, model in models.items():
-                    for name, param in model.named_parameters():
-                        if param.requires_grad:
-                            print(f"{self.name} {key} {name}: requires_grad={param.requires_grad}")
-                self.show_trainable_params = True
+                progress_bar.set_description(f" {self.name} phase: iter {i + 1}/{self.tolerance}")
+                progress_bar.set_postfix({self.loss: f"{TMP_LOSS[self.loss].item():.4f}"})
+                progress_bar.update(1)
             
-            for i in range(self.tolerance):
-                # Perform loss calculation
-                with autocast(**_autocast_arg):
-                    PREDS, TMP_LOSS = self.lossfunc(data, **self.loss_arg)
-                
-                # Optionally update based on the loss
-                if not self.conditioned_update:
+            if self.current_best is None:
+                self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
+
+            # Check for improvement in the loss
+            if np.abs(TMP_LOSS[self.loss].cpu().detach().numpy()) < np.abs(self.current_best):
+                self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
+                # CONDITIONED UPDATE
+                if self.conditioned_update:
                     update(TMP_LOSS)
+                break
 
-                # Handle progress bar updates
-                if self.verbose:
-                    progress_bar.set_description(f" {self.name} phase: iter {i + 1}/{self.tolerance}")
-                    progress_bar.set_postfix({self.loss: f"{TMP_LOSS[self.loss].item():.4f}"})
-                    progress_bar.update(1)
-                
-                if self.current_best is None:
-                    self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
-
-                # Check for improvement in the loss
-                if np.abs(TMP_LOSS[self.loss].cpu().detach().numpy()) < np.abs(self.current_best):
-                    self.current_best = TMP_LOSS[self.loss].cpu().detach().numpy()
-                    # CONDITIONED UPDATE
-                    if self.conditioned_update:
-                        update(TMP_LOSS)
-                    break
-
-            # Close progress bar if used
-            if self.verbose and progress_bar is not None:
-                progress_bar.close()
-                
-            self.PREDS, self.TMP_LOSS = PREDS, TMP_LOSS
-            return PREDS, TMP_LOSS
+        # Close progress bar if used
+        if self.verbose and progress_bar is not None:
+            progress_bar.close()
+            
+        self.PREDS, self.TMP_LOSS = PREDS, TMP_LOSS
+        return PREDS, TMP_LOSS
     
     def set_params(self, models):
         self.train_module = list(models.keys()) if self.train_module == 'all' else self.train_module
@@ -291,8 +290,6 @@ class BasicTrainer:
                  models = None,
                  preprocess = None,
                  modality = {'csi', 'rimg', 'tag', 'ind'},
-                 train_module = 'all',
-                 eval_module = None,
                  notion = None,
                  *args, **kwargs
                  ):
@@ -319,9 +316,6 @@ class BasicTrainer:
         self.modality = modality
         
         self.preprocess = preprocess
-        
-        self.train_module =  train_module
-        self.eval_module = eval_module
 
         self.start_time = 0
         self.end_time = 0
@@ -335,6 +329,10 @@ class BasicTrainer:
         
         self.train_batches = 0
         self.train_sampled_batches = None
+
+        self.weights = {'LOSS': 1}
+
+        self.lossfuncs = {'LOSS': torch.nn.MSELoss()}
         
         self.training_phases = {
             'main': TrainingPhase(name='main',
@@ -351,7 +349,6 @@ class BasicTrainer:
             'main': ValidationPhase(name='main', lossfunc=self.calculate_loss),
             'default_test': ValidationPhase(name='test', lossfunc=self.calculate_loss, loader='test'),
         }
-        self.phase_condition = None
         
         self.on_test = 'train'
         self.test_mode = None
@@ -361,6 +358,17 @@ class BasicTrainer:
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
         self.early_stopping = None
+
+    @staticmethod
+    # Multiplies losses by weights
+    def loss_weighting(calculate_loss):
+        def wrapper(self, *args, **kwargs):
+            PREDS, TMP_LOSS = calculate_loss(self, *args, **kwargs)
+            return PREDS, {
+                key: value * self.weights.get(key, 1.0)
+                for key, value in TMP_LOSS.items()
+            }
+        return wrapper
         
     def data_preprocess(self, mode, data):
         # mode in ('train', 'valid', 'test')
@@ -391,11 +399,14 @@ class BasicTrainer:
     def assign_params(self):
         pass
 
+    def phase_condition(self, name, epoch):
+        return True
+
     def train_epoch(self, epoch, EPOCH_LOSS, progress_bar):
         progress_bar.set_description(f"{self.notion} {self.name} train: ep {self.current_epoch}/{self.epochs}")
 
         for idx, data in enumerate(self.dataloader['train'], 1):
-            TMP_LOSS = {loss: [] for loss in self.loss_terms}
+            TMP_LOSS = {loss: None for loss in self.loss_terms}
             
             # Randomly select samples
             if self.train_sampled_batches is not None and idx not in self.train_sampled_batches:
@@ -406,21 +417,25 @@ class BasicTrainer:
             
             # Train per phase
             for name, phase in self.training_phases.items():
-                if self.phase_condition is not None:
-                    phase_flag = self.phase_condition(name, epoch)
-                else:
-                    phase_flag = True
-                    
-                _, TMP_LOSS_ = phase(phase_flag, self.models, data_)
-                TMP_LOSS.update(TMP_LOSS_)
+  
+                phase_flag = self.phase_condition(name, epoch)
+                if phase_flag:
+                    _, TMP_LOSS_ = phase(self.models, data_)
+                    TMP_LOSS.update(TMP_LOSS_)
 
             # Log loss
-            for key in TMP_LOSS.keys():
-                EPOCH_LOSS[key].append(TMP_LOSS[key].item())
+            for key, value in TMP_LOSS.items():
+                if value is not None:
+                    EPOCH_LOSS[key].append(value.item())
+
+            if TMP_LOSS['LOSS'] is not None:
+                show = TMP_LOSS['LOSS'].item()
+            else:
+                show = next(v.item() for v in TMP_LOSS.values() if v is not None)
 
             # Update progress bar
             progress_bar.set_postfix({'batch': f"{idx}/{self.train_batches}",
-                                'loss': f"{TMP_LOSS['LOSS'].item():.4f}"})
+                                'loss': f"{show:.4f}"})
             progress_bar.n = idx
             progress_bar.refresh()
 
@@ -486,6 +501,10 @@ class BasicTrainer:
                         f"{' '.join([key + ': ' + str(value.item()) for key, value in VALID_LOSS.items()])}\n"
                         f"End time = {self.end_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         f"Total training time = {str(self.end_time-self.start_time)}\n"
+                        f"Loss functions:\n"
+                        f"{' '.join([key + ': ' + value.__class__.__name__ for key, value in self.lossfuncs.items()])}\n"
+                        f"Loss weights:\n"
+                        f"{' '.join([key + ': ' + str(value) for key, value in self.weights.items()])}\n"
                         f"\n\nMODULES:\n{list(self.models.values())}\n")
 
 
@@ -536,7 +555,7 @@ class BasicTrainer:
         self.start_time = datetime.fromtimestamp(start)
         print(f"\033[32m=========={self.start_time.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Training starting==========\033[0m")
         
-        epoch_progress = tqdm(range(self.start_ep, self.epochs), dynamic_ncols=True)
+        epoch_progress = tqdm(range(self.start_ep, self.epochs + 1), initial=1, dynamic_ncols=True)
         for epoch in epoch_progress:
             print('')
             epoch_progress.set_description(f"{self.notion} {self.name} training")
@@ -549,7 +568,11 @@ class BasicTrainer:
                 self.train_epoch(epoch, EPOCH_LOSS, progress_bar)
 
             for key, value in EPOCH_LOSS.items():
-                EPOCH_LOSS[key] = np.average(value)
+                if len(value) == 0:
+                    EPOCH_LOSS[key] = None
+                else:
+                    EPOCH_LOSS[key] = np.average(value)
+            
             self.losslog('train', EPOCH_LOSS)
             self.extra_params.update()
             self.start_ep += 1

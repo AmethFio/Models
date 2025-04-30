@@ -25,7 +25,13 @@ class LossUnit:
         self.optimizer = None
         
     def __call__(self, mode, loss_value): 
-        self.log[mode].append(loss_value)
+        if loss_value is None:
+            if len(self.log[mode]) == 0:
+                self.log[mode].append(0)
+            else:
+                self.log[mode].append(log[mode][-1])
+        else:
+            self.log[mode].append(loss_value)
         
     def set_optimizer(self, optimizer, lr, params):
         self.optimizer = optimizer(params, lr)
