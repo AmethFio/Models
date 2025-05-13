@@ -43,7 +43,7 @@ class Preprocess:
         # CSI: Window length = 100, 3 rx
         # CSI: Extract amp and phase
         data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=-1)
-        data['csi'] = data['csi'].reshape(-1, 200, 3 * 30 * 2) # batch * packet * (rx * sub * 2)
+        data['csi'] = data['csi'].reshape(data['csi'].shape[0], 200, -1) # batch * packet * (rx * sub * 2)
         return data
     
     

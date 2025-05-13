@@ -30,7 +30,7 @@ import torch.nn.functional as F
 version = 'LSTMCNN'
 
 class Preprocess:
-    def __init__(self, new_size=(64, 64)):
+    def __init__(self, new_size=(128, 128)):
         self.new_size = new_size
         self.batch_size = 32
 
@@ -185,10 +185,10 @@ class LSTMCNNTrainer(BasicTrainer):
         self.modality = {'rimg', 'csi', 'tag', 'ind'}
         self.preprocess = Preprocess()
 
-        self.dis_loss = nn.BCEWithLogitsLoss(reduction='sum')
+        self.recon_lossfunc = nn.BCEWithLogitsLoss(reduction='sum')
         
         self.loss_terms = (['LOSS'])
-        self.pred_terms = ('GT', 'PRED', 'TAG', 'IND')
+        self.pred_terms = ('GT', 'PRED', 'LAT', 'TAG', 'IND')
         
         self.losslog = MyLossLog(name=self.name,
                            loss_terms=self.loss_terms,
@@ -210,6 +210,7 @@ class LSTMCNNTrainer(BasicTrainer):
         PREDS = {
             'GT'      : data['rimg'],
             'PRED'    : ret['re_img'],
+            'LAT'     : ret['z'],
             'TAG'     : data['tag'],
             'IND'     : data['ind']
         }

@@ -38,11 +38,11 @@ class Preprocess:
     @staticmethod
     def encode_time(x, L=10, window_size=151):
         window_size *= 3
-        frequencies = torch.tensor([2**i for i in range(L)], dtype=torch.float3)
+        frequencies = torch.tensor([2**i for i in range(L)], dtype=torch.float32)
         x = x / window_size
         pos_enc = torch.cat([torch.sin(frequencies[:, None] * torch.pi * x),
                              torch.cos(frequencies[:, None] * torch.pi * x)], dim=0)
-        return pos_enc
+        return pos_enc.permute(1, 0)
     
     def __call__(self, data, modalities):
         """
@@ -138,7 +138,7 @@ class ImageVAE(nn.Module):
         """
 
         image = self.image_encoder(rimg)
-        time = self.time_encoder(img_ind.reshape(32,1,1,-1))
+        time = self.time_encoder(img_ind.reshape(img_ind.shape[0], 1,1,-1))
         image = torch.flatten(image, start_dim=1)
         time = time[:, 0, 0, :]
         x = torch.concat([time, image], dim=1)
@@ -204,14 +204,14 @@ class CSIVAE(nn.Module):
     def encode(self, csi_ind, csi):
 
         # CSI = 32 * 151 * 30 * 3 -> 32 * 151 * 64
-        feature = self.feature_encoder(csi.view(32, 151, -1))
-        time = self.time_encoder(csi_ind.reshape(32, 1, 1, -1))
+        feature = self.feature_encoder(csi.view(csi.shape[0], 151, -1))
+        time = self.time_encoder(csi_ind.reshape(csi_ind.shape[0], 1, 1, -1))
  
         # feature aggregation
         feature = feature.reshape(feature.shape[0], -1)
         
         # concatenate features and temporal encoding
-        time = time.view(32, -1)
+        time = time.view(time.shape[0], -1)
         x = torch.concat([time, feature], dim=1)
         
         mu, logvar = self.latent_encoder(x).chunk(2, dim=-1)
@@ -235,6 +235,8 @@ class CSIVAE(nn.Module):
     
 
 class MoPoEVAE(nn.Module):
+
+
     r"""
     Mixture-of-Product-of-Experts Variational Autoencoder.
 
@@ -257,6 +259,9 @@ class MoPoEVAE(nn.Module):
     ----------
     Sutter, Thomas & Daunhawer, Imant & Vogt, Julia. (2021). Generalized Multimodal ELBO.
     """
+
+    name = 'mopoevae'
+
 
     def __init__(
         self,
@@ -308,6 +313,7 @@ class MoPoEVAE(nn.Module):
         """
         
         mu_csi, logvar_csi = self.csivae.encode(csi_ind, csi)
+
         if rimg is not None:
             mu_img, logvar_img = self.imgvae.encode(img_ind, rimg)
 
@@ -339,13 +345,14 @@ class MoPoEVAE(nn.Module):
             logvar_out.append(logvar_s)
             qz_x = Normal(loc=mu_s, logvar=logvar_s)
             qz_xs.append(qz_x)
+
         mu_out = torch.stack(mu_out)
         logvar_out = torch.stack(logvar_out)
 
         moe_mu, moe_logvar = MixtureOfExperts()(mu_out, logvar_out)
 
         qz_x = Normal(loc=moe_mu, logvar=moe_logvar)
-        return [qz_xs, qz_x]
+        return qz_xs, qz_x
 
     def decode(self, qz_x):
         r"""Forward pass of joint latent dimensions through decoder networks.
@@ -525,7 +532,7 @@ class MoPoEVAETrainer(BasicTrainer):
                  *args, **kwargs
                  ):
         
-        super(ThroughWallTrainer, self).__init__(*args, **kwargs)
+        super(MoPoEVAETrainer, self).__init__(*args, **kwargs)
     
         self.modality = {'rimg', 'csi', 'csi_ind', 'img_ind', 'tag', 'ind'}
         
@@ -537,7 +544,11 @@ class MoPoEVAETrainer(BasicTrainer):
                            pred_terms=self.pred_terms)
         
         self.model = MoPoEVAE(device=self.device)
-        self.models = vars(self.model)
+        self.models = {
+            'mopoevae': self.model
+        }
+
+        self.preprocess = Preprocess()
         
     def calculate_loss(self, data, mode='train'):
         r"""Calculate MoPoE VAE loss.
@@ -555,9 +566,16 @@ class MoPoEVAETrainer(BasicTrainer):
             data['rimg'] = None # Block out input img for test
             
         ret = self.model(data)
+        
+        while True:
+            if isinstance(ret['px_zs'], list):
+                if len(ret["px_zs"])==1:
+                    ret["px_zs"] = ret["px_zs"][0]
+            else:
+                break
 
-        kl = self.calc_kl_moe(fwd_rtn["px_zs"])
-        ll = self.calc_ll(x, fwd_rtn["qz_xs_subsets"])
+        kl = self.calc_kl_moe(ret["px_zs"])
+        ll = self.calc_ll(x, ret["qz_xs_subsets"])
 
         total = self.beta * kl - ll
 
@@ -587,6 +605,7 @@ class MoPoEVAETrainer(BasicTrainer):
         """
         weight = 1/len(qz_xs)
         kl = 0
+
         for qz_x in qz_xs:
             kl += qz_x.kl_divergence(self.prior).mean(0).sum()
         return kl*weight
