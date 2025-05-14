@@ -3,5 +3,8 @@ new.py
 __pycache__/
 .ipynb_checkpoints/
 Datasetting/__pycache__/
+<<<<<<< Updated upstream
 Alpha/__pycache__/
 Structure/__pycache__/
+=======
+>>>>>>> Stashed changes
