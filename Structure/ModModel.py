@@ -90,14 +90,14 @@ class CSIEncoder3V(nn.Module):
         return [out1, out2, out3], [z1, z2, z3], [mu1, mu2, mu3], [logvar1, logvar2, logvar3]
 
 
-class CSIEncoderAggr(CSIEncoder3V):
+class CSIEncoderAPool(CSIEncoder3V):
     name = 'csien'
     
     def __init__(self, *args, **kwargs):
-        super(CSIEncoderAggr, self).__init__(*args, **kwargs)
+        super(CSIEncoderAPool, self).__init__(*args, **kwargs)
 
     def __str__(self):
-        return f"CSIENAggr"
+        return f"CSIENAPool"
 
     def forward(self, csi, pd):
         fea_csi = self.cnn(csi)

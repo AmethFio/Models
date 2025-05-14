@@ -15,7 +15,7 @@ from Loss import MyLossLog, MyLossCTR
 from Structure.StandardStudent import Student
 from Structure.StandardTeacher import Teacher
 from Models.Structure.Model import *
-from Models.Structure.ModModel import CSIEncoderHPool as CSIen
+from Models.Structure.ModModel import CSIEncoderAttn as CSIen
 from Alpha.Losses import NCCMSELoss, MMDLoss
 
 from Wasserstein import WGANCritic, WGANLoss
@@ -170,9 +170,9 @@ class StudentTrainer(BasicTrainer):
         rimage_loss = self.lossfuncs['RIMAGE'](ret['s_rimage'], data['rimg']) / data['rimg'].shape[0]
         
         LOSS = latent_loss * self.weights['LATENT']
-        # LOSS += feature_loss * self.weights['FEATURE']
-        # LOSS += rimage_loss * self.weights['RIMAGE']
-        # LOSS += cimage_loss * self.weights['CIMAGE']
+        LOSS += feature_loss * self.weights['FEATURE']
+        LOSS += rimage_loss * self.weights['RIMAGE']
+        LOSS += cimage_loss * self.weights['CIMAGE']
         # LOSS += center_loss * self.weights['CENTER']
         # LOSS += depth_loss * self.weights['DEPTH']
         
