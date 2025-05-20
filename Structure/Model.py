@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 from torchinfo import summary
 import torch.nn.init as init
 
@@ -61,6 +62,17 @@ def initialize_weights(model):
             if layer.bias is not None:
                 init.zeros_(layer.bias)
     return model
+
+
+class GEGLU_proj(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(GEGLU_proj, self).__init__()
+        self.proj = nn.Linear(in_dim, 2 * out_dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        x, gates = x.chunk(2, dim=-1)
+        return x * F.gelu(gates)
 
 
 class Interpolate(nn.Module):

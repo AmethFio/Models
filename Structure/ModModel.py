@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from Structure.Model import batchnorm_layer, reparameterize
+from Structure.Model import batchnorm_layer, reparameterize, GEGLU_proj
 
 class CSIEncoder3V(nn.Module):
     name = 'csien'
@@ -95,6 +95,8 @@ class CSIEncoderAPool(CSIEncoder3V):
     
     def __init__(self, *args, **kwargs):
         super(CSIEncoderAPool, self).__init__(*args, **kwargs)
+        self.fc_feature = GEGLU_proj(self.csi_feature_length + self.pd_feature_length, 
+                      self.feature_length)
 
     def __str__(self):
         return f"CSIENAPool"
@@ -121,6 +123,8 @@ class CSIEncoderAttn(CSIEncoder3V):
     def __init__(self, *args, **kwargs):
         super(CSIEncoderAttn, self).__init__(*args, **kwargs)
         self.attn_vector = nn.Parameter(torch.randn(128))  # Learnable attention vector
+        self.fc_feature = GEGLU_proj(self.csi_feature_length + self.pd_feature_length, 
+                      self.feature_length)
 
     def __str__(self):
         return f"CSIENAttn"
@@ -154,11 +158,14 @@ class CSIEncoderHPool(CSIEncoder3V):
     def __init__(self, *args, **kwargs):
         super(CSIEncoderHPool, self).__init__(*args, **kwargs)
 
-        self.fc_feature = nn.Sequential(
-            nn.Linear(self.csi_feature_length * 3 + self.pd_feature_length, 
-                      self.feature_length),
-            nn.ReLU()
-        )
+        # self.fc_feature = nn.Sequential(
+        #     nn.Linear(self.csi_feature_length * 3 + self.pd_feature_length, 
+        #               self.feature_length),
+        #     nn.ReLU()
+        # )
+        
+        self.fc_feature = GEGLU_proj(self.csi_feature_length * 3 + self.pd_feature_length, 
+                       self.feature_length)
 
     def __str__(self):
         return f"CSIENHP"
@@ -194,6 +201,8 @@ class CSIEncoderConcat(CSIEncoder3V):
                       self.feature_length),
             nn.ReLU()
         )
+        # self.fc_feature = GEGLU_proj(self.csi_feature_length * 3 + self.pd_feature_length, 
+        #                self.feature_length)
 
     def __str__(self):
         return f"CSIENCon"
