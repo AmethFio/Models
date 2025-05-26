@@ -169,11 +169,11 @@ class StudentTrainer(BasicTrainer):
             'ctrde': CenterDecoder().to(self.device)
                 }
 
-        # self.training_phases = {'Feature_extractor': TrainingPhase(name = 'main',
-        #                                                     train_module = ['csien'],
-        #                                                     eval_module = ['imgen', 'rimgde', 'cimgde', 'ctrde'],
-        #                                                     verbose=False
-        #                                                     )}
+        self.training_phases = {'Feature_extractor': TrainingPhase(name = 'main',
+                                                            train_module = ['csien'],
+                                                            eval_module = ['imgen', 'rimgde', 'cimgde', 'ctrde'],
+                                                            verbose=False
+                                                            )}
         
         # self.valid_phases = {
         #     'source': ValidationPhase(name='source', loader='valid'),
