@@ -567,7 +567,7 @@ class DANN_Loader:
     Can combine guide batch with source.
     """
     
-    def __init__(self, source_loader, target_loader, source_rate=3, target_guide=False, target_guide_num=1):
+    def __init__(self, source_loader, target_loader, source_rate=3, target_guide=False, target_guide_num=1, few_shot_target=False):
         self.source_loader = source_loader
         self.target_loader = target_loader
         self.source_iter = iter(self.source_loader)
@@ -577,12 +577,15 @@ class DANN_Loader:
         
         self.source_rate = source_rate
         
+        self.few_shot_target = few_shot_target
         self.target_guide_batch = None
         self.target_guide = target_guide
         self.target_guide_num = target_guide_num
         if target_guide:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
+        if few_shot_target:
+            self.target_batch = None
         
     def __iter__(self):
         return self
@@ -593,8 +596,8 @@ class DANN_Loader:
             # automatically reloop
             self.reset()
             raise StopIteration
-
-            
+        
+        # Get Source
         try:
             # Fetch 3 samples from the source loader
             source_samples = [next(self.source_iter) for _ in range(self.source_rate)]
@@ -606,7 +609,7 @@ class DANN_Loader:
             source_samples = [next(self.source_iter) for _ in range(self.source_rate)]
             source_batch = {key: torch.cat([sample[key] for sample in source_samples], dim=0) 
                             for key in source_samples[0]}  # Get the first batch again
-            
+
         if self.target_guide:
             # ITERATE OVER TARGET GUIDE BATCHES, YIELD ONE
             try:
@@ -618,8 +621,12 @@ class DANN_Loader:
             source_batch = {key: torch.cat([source_batch[key], target_guide[key]], dim=0)
                             for key in source_batch}
 
+        # Get Target
         try:
             target_data = next(self.target_iter)
+            if self.target_batch is None:
+                self.target_batch = target_data
+
         except StopIteration:
             self.target_iter = iter(self.target_loader)  # Reset the iterator
             target_data = next(self.target_iter)         # Get the first batch again
