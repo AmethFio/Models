@@ -45,6 +45,54 @@ Feature_extractor_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'dmnde']
 Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
+class ShapeCoordLoss:
+    def __init__(self, mode='c', device='gpu:0'):
+        self.mode = mode
+        self.device = device
+        self.recon_lossfunc = nn.MSELoss()
+        self.iou_loss = PairwiseIoU()
+
+    def weighted_loss(self, weight, est, gt):
+        return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
+    
+    def __call__(self, source_coord, target_coord,
+                    source_shape, target_shape,
+                    source_fea, target_fea, 
+                    source_mu, source_logvar, 
+                    target_mu, target_logvar):
+
+        source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
+        target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
+        cos_sim = torch.matmul(target_coord, source_coord.T)
+        cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
+        _, indices = cos_sim.max(dim=1)
+
+        if self.mode == 'c':
+            match_fea_loss = self.recon_lossfunc(target_fea, source_fea[indices])
+            match_mu_loss = self.recon_lossfunc(target_mu, source_mu[indices])
+            match_logvar_loss = self.recon_lossfunc(target_logvar, source_logvar[indices])
+
+        elif self.mode == 's':
+            iou = self.iou_loss(source_shape, target_shape)
+            max_sim_values, indices = iou.max(dim=1)
+            sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+
+            match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
+            match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
+            match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
+
+        else:
+            iou = self.iou_loss(source_shape[indices], target_shape)
+            max_sim_values, shp_indices = iou.max(dim=1)
+            sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+
+            match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices][shp_indices])
+            match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices][shp_indices])
+            match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices][shp_indices])
+
+        return match_fea_loss, match_mu_loss, match_logvar_loss
+                    
+
 class Teacher(nn.Module):
 
     def __init__(self, device=None):
@@ -277,7 +325,7 @@ class StudentTrainer(BasicTrainer):
     def __init__(self,
                  alpha=0.8,
                  recon_lossfunc=nn.MSELoss(),
-                 adapting=False,
+                 shapecoord='c',
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
@@ -291,7 +339,8 @@ class StudentTrainer(BasicTrainer):
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.adv = nn.CrossEntropyLoss()
         self.iou_loss = PairwiseIoU()
-        self.shape_only = True
+        self.shapecoord = shapecoord
+        self.shape_coord_loss = ShapeCoordLoss(mode=shapecoord, device=self.device)
 
         self.loss_terms = ('LOSS', 'MU', 'LOGVAR', 'LATENT', 'FEATURE', 'IMG', 'CTR', 'DPT', 'DOM', 'DOM_ACC', 'TG_LOSS', 'TG_FEA', 'TG_LAT', 'TG_CTR', 'TG_DPT')
         self.pred_terms = ('C_GT', 'R_GT',
@@ -306,8 +355,8 @@ class StudentTrainer(BasicTrainer):
 
         # FOR ADAPTING
         self.valid_phases = {
-            'source': ValidationPhase(name='source', loader='valid'),
-            'target': ValidationPhase(name='target', loader='valid2')
+            'source': ValidationPhase(name='source', loader='valid', lossfunc=self.calculate_loss_main),
+            'target': ValidationPhase(name='target', loader='valid2', lossfunc=self.calculate_loss_main)
         }
         self.early_stopping_trigger = 'target'
 
@@ -343,7 +392,7 @@ class StudentTrainer(BasicTrainer):
                                                                    train_module = Feature_extractor_train,
                                                                    eval_module = Feature_extractor_eval,
                                                                    verbose=False,
-                                                                   loss_arg={'reverse_feature': True},
+                                                                   lossfunc=self.calculate_loss_fe,                                                                   loss_arg={'reverse_feature': True},
                                                                    plot_terms=('LOSS', 'LATENT', 'MU', 'LOGVAR', 'FEATURE', 'IMG', 'CTR', 'DPT')
                                                                    ),
                                 'Domain_classifier': TrainingPhase(name = 'Domain_classifier',
@@ -353,6 +402,7 @@ class StudentTrainer(BasicTrainer):
                                                                    tolerance=1,
                                                                    conditioned_update=True,
                                                                    verbose=False,
+                                                                   lossfunc=self.calculate_loss_da,
                                                                    loss_arg={'reverse_feature': False},
                                                                    plot_terms=('DOM', 'DOM_ACC')
                                                                    ),
@@ -362,6 +412,7 @@ class StudentTrainer(BasicTrainer):
                                                                    loss = 'TG_LOSS',
                                                                    tolerance=1,
                                                                    verbose=False,
+                                                                   lossfunc=self.calculate_loss_ta,
                                                                    loss_arg={'reverse_feature': False},
                                                                    plot_terms=('TG_LOSS', 'TG_FEA', 'TG_LAT', 'TG_CTR', 'TG_DPT')
                                                                    ),
@@ -451,49 +502,6 @@ class StudentTrainer(BasicTrainer):
 
     def weighted_loss(self, weight, est, gt):
         return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
-    
-    def match_coord_shape_loss(self, 
-                        source_coord, target_coord,
-                        source_shape, target_shape,
-                        source_fea, target_fea, 
-                        source_mu, source_logvar, 
-                        target_mu, target_logvar):
-
-        source_coord = F.normalize(source_coord, p=2, dim=1)  # Normalize source_coord
-        target_coord = F.normalize(target_coord, p=2, dim=1)  # Normalize target_coord
-        cos_sim = torch.matmul(target_coord, source_coord.T)
-        cos_sim = torch.clamp(cos_sim, min=-1.0, max=1.0)
-        _, indices = cos_sim.max(dim=1)
-
-        iou = self.iou_loss(source_shape[indices], target_shape)
-        max_sim_values, _ = iou.max(dim=1)
-        sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
-
-        match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
-        match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
-        match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
-
-        match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
-
-        return match_fea_loss, match_kd_loss
-    
-    def match_shape_loss(self, 
-                        source_shape, target_shape,
-                        source_fea, target_fea, 
-                        source_mu, source_logvar, 
-                        target_mu, target_logvar):
-
-        iou = self.iou_loss(source_shape, target_shape)
-        max_sim_values, indices = iou.max(dim=1)
-        sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
-
-        match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
-        match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
-        match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
-
-        match_kd_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
-
-        return match_fea_loss, match_kd_loss
 
     def calculate_loss_main(self, data, reverse_feature=False):
         if len(data) == 2:
@@ -725,18 +733,13 @@ class StudentTrainer(BasicTrainer):
                              source_ret['s_mu'], source_ret['s_logvar'],
                              target_ret['s_mu'], target_ret['s_logvar'])
 
-            if self.shape_only:
-                match_fea_loss, match_lat_loss = self.match_shape_loss(
-                    source_data['cimg'], target_data['cimg'],
-                    *t_supervision
-                    )
-            else:
-                match_fea_loss, match_lat_loss = self.match_coord_shape_loss(
-                    source_coord, target_coord, 
-                    source_data['cimg'], target_data['cimg'], 
-                    *t_supervision
-                    )
+            match_fea_loss, match_mu_loss, match_logvar_loss = self.shape_coord_loss(
+                source_coord, target_coord, 
+                source_data['cimg'], target_data['cimg'], 
+                *t_supervision
+            )
 
+            match_lat_loss = self.alpha * match_mu_loss + (1 - self.alpha) * match_logvar_loss
             
             target_ctr_loss = self.recon_lossfunc(target_ret['s_center'], torch.squeeze(ctr))
             target_dpt_loss = self.recon_lossfunc(target_ret['s_depth'], torch.squeeze(dpt))
