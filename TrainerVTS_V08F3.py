@@ -172,6 +172,7 @@ class StudentTrainer(BasicTrainer):
         self.training_phases = {'Feature_extractor': TrainingPhase(name = 'main',
                                                             train_module = ['csien'],
                                                             eval_module = ['imgen', 'rimgde', 'cimgde', 'ctrde'],
+                                                            lossfunc = self.calculate_loss,
                                                             verbose=False
                                                             )}
         
