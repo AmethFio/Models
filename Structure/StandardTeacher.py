@@ -42,16 +42,14 @@ class Teacher(nn.Module):
 class TeacherTrainer(BasicTrainer):
     def __init__(self,
                  beta=0.5,
-                 recon_lossfunc=nn.BCEWithLogitsLoss(reduction='sum'),
                  *args, **kwargs):
         super(TeacherTrainer, self).__init__(*args, **kwargs)
 
         self.modality = {'rimg', 'cimg', 'center', 'depth', 'tag', 'ctr', 'dpt', 'ind'}
 
         self.beta = beta
-        self.recon_lossfunc = recon_lossfunc
 
-        self.loss_terms = ('LOSS', 'KL', 'R_RECON', 'C_RECON', 'CTR', 'DPT')
+        self.loss_terms = ('LOSS', 'KL', 'R_RECON', 'C_RECON', 'CENTER', 'DEPTH')
         self.pred_terms = ('R_GT', 'C_GT', 
                            'GT_DPT', 'GT_CTR', 
                            'R_PRED', 'C_PRED', 
@@ -59,6 +57,7 @@ class TeacherTrainer(BasicTrainer):
                            'LAT', 'TAG', 'IND')
         self.depth_loss = nn.MSELoss()
         self.center_loss = nn.MSELoss()
+        self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         
         self.losslog = MyLossCTR(name=self.name,
                            loss_terms=self.loss_terms,
@@ -73,11 +72,20 @@ class TeacherTrainer(BasicTrainer):
                        'rimgde': self.teacher.rimgde,
                        'ctrde': self.teacher.ctrde
                        }
+
+        self.weights = {
+            'KL': self.beta,
+            'R_RECON': 1.e-3,
+            'C_RECON': 1.e-3,
+            'CENTER': 100.,
+            'DEPTH': 100.,
+        }
         
     def kl_loss(self, mu, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         return kl_loss
 
+    @BasicTrainer.loss_weighting
     def calculate_loss(self, data):
         cimg = torch.where(data['cimg'] > 0, 1., 0.)
         rimg = data['rimg']
@@ -85,32 +93,35 @@ class TeacherTrainer(BasicTrainer):
         ret = self.teacher(rimg)
 
         kl_loss = self.kl_loss(ret['mu'], ret['logvar'])
-        r_recon_loss = self.recon_lossfunc(ret['rimage'], rimg) / ret['rimage'].shape[0]
-        c_recon_loss = self.recon_lossfunc(ret['cimage'], cimg) / ret['cimage'].shape[0]
-        vae_loss = kl_loss * self.beta + r_recon_loss + c_recon_loss
+        r_recon_loss = self.img_loss(ret['rimage'], rimg) / ret['rimage'].shape[0]
+        c_recon_loss = self.img_loss(ret['cimage'], cimg) / ret['cimage'].shape[0]
         
         center_loss = self.center_loss(ret['center'], torch.squeeze(data['center']))
         depth_loss = self.depth_loss(ret['depth'], torch.squeeze(data['depth']))
         
-        loss = vae_loss + center_loss + depth_loss
+        LOSS = kl_loss * self.beta
+        LOSS += r_recon_loss * self.weights['R_RECON']
+        LOSS += c_recon_loss * self.weights['C_RECON']
+        LOSS += center_loss * self.weights['CENTER']
+        LOSS += depth_loss * self.weights['DEPTH']
 
-        TEMP_LOSS = {'LOSS': loss,
+        TEMP_LOSS = {'LOSS': LOSS,
                     'KL': kl_loss,
                     'R_RECON': r_recon_loss,
                     'C_RECON': c_recon_loss,
-                    'CTR': center_loss, 
-                    'DPT': depth_loss
+                    'CENTER': center_loss, 
+                    'DEPTH': depth_loss
                     }
         
         PREDS = {'R_GT': rimg,
                 'C_GT': cimg,
-                'R_PRED': rimg_re,
-                'C_PRED': cimg_re,
+                'R_PRED': ret['rimage'],
+                'C_PRED': ret['cimage'],
                 'GT_CTR': data['center'],
-                'CTR_PRED': ctr,
+                'CTR_PRED': ret['center'],
                 'GT_DPT': data['depth'],
-                'DPT_PRED': depth,
-                'LAT': torch.cat((mu, logvar), -1),
+                'DPT_PRED': ret['depth'],
+                'LAT': torch.cat((ret['mu'], ret['logvar']), -1),
                 'TAG': data['tag'],
                 'IND': data['ind']
                 }

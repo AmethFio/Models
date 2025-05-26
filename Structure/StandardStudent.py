@@ -114,7 +114,7 @@ class StudentTrainer(BasicTrainer):
         self.depth_weight = 1.
         self.feature_weight = 1.
 
-        self.wasserstein_loss = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)  # Sinkhorn approx
+        # self.wasserstein_loss = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)  # Sinkhorn approx
 
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.recon_lossfunc(mu_s, mu_t) / mu_s.shape[0]

@@ -25,6 +25,13 @@ LAT = (1, 128)
 RIMG = (1, 1, 128, 226)
 PD = (1, 62)
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            m.bias.data.fill_(0.0)
+    return m
+
 
 def batchnorm_layer(channels, batchnorm='identity'):
     """
@@ -241,9 +248,12 @@ class ImageDecoder(nn.Module):
         # 128 * 128 * 128
         # 1 * 128 * 128
 
-        self.fclayers = nn.Sequential(
-            nn.Linear(self.latent_dim, 512 * 16 * 16),
-        )
+        self.fclayers = nn.Sequential(nn.Linear(self.latent_dim, 512 * 16 * 16))
+
+        # self.fclayers = GEGLU_proj(self.latent_dim, 512 * 16 * 16)
+
+        self.cnn = init_weights(self.cnn)
+        self.fclayers = init_weights(self.fclayers)
 
     def __str__(self):
         return f"IMGDE{version}"
