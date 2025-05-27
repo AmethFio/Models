@@ -9,7 +9,7 @@ import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Structure.Model import *
 from Loss import MyLossLog, MyLossCTR
-from Alpha.Losses import PairwiseIoU
+from Alpha.Losses import PairwiseIoU, NCC
 
 from torch.autograd import Function
 
@@ -50,7 +50,7 @@ class ShapeCoordLoss:
         self.mode = mode
         self.device = device
         self.recon_lossfunc = nn.MSELoss()
-        self.iou_loss = PairwiseIoU()
+        self.iou_loss = NCC()
 
     def weighted_loss(self, weight, est, gt):
         return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
@@ -81,7 +81,7 @@ class ShapeCoordLoss:
             match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
             match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
 
-        else:
+        elif self.mode == 'cs':
             iou = self.iou_loss(source_shape[indices], target_shape)
             max_sim_values, shp_indices = iou.max(dim=1)
             sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
@@ -356,7 +356,8 @@ class StudentTrainer(BasicTrainer):
         # FOR ADAPTING
         self.valid_phases = {
             'source': ValidationPhase(name='source', loader='valid', lossfunc=self.calculate_loss_main),
-            'target': ValidationPhase(name='target', loader='valid2', lossfunc=self.calculate_loss_main)
+            'target': ValidationPhase(name='target', loader='valid2', lossfunc=self.calculate_loss_main),
+            'test': ValidationPhase(name='test', loader='test', lossfunc=self.calculate_loss_main),
         }
         self.early_stopping_trigger = 'target'
 

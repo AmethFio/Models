@@ -347,7 +347,7 @@ class BasicTrainer:
         
         self.valid_phases = {
             'main': ValidationPhase(name='main', lossfunc=self.calculate_loss),
-            'default_test': ValidationPhase(name='test', lossfunc=self.calculate_loss, loader='test'),
+            'test': ValidationPhase(name='test', lossfunc=self.calculate_loss, loader='test'),
         }
         
         self.on_test = 'train'
@@ -586,7 +586,7 @@ class BasicTrainer:
             # Validate per phase
             for name, phase in self.valid_phases.items():
                 
-                if name == 'default_test':
+                if name == 'test':
                     continue
 
                 self.losslog.reset('pred', dataset='VALID')
@@ -619,11 +619,9 @@ class BasicTrainer:
 
     @timer
     def test(self, single_test=False, loader: str = 'test', subsample_fraction=1, *args, **kwargs):
-        if 'default_test' not in self.valid_phases.keys():
-            self.valid_phases['default_test'] = ValidationPhase(name='test', loader='test')
         
         # Change data loader if needed
-        self.valid_phases['default_test'].loader = loader
+        self.valid_phases['test'].loader = loader
         
         # Empty loss log
         self.losslog.reset('test', 'pred', dataset=loader)
@@ -634,7 +632,7 @@ class BasicTrainer:
             
         # Test using default validation phase
         TEST_LOSS = {loss: [] for loss in self.loss_terms}
-        self.valid_epoch(TEST_LOSS, self.valid_phases['default_test'])
+        self.valid_epoch(TEST_LOSS, self.valid_phases['test'])
 
         self.on_test = loader
             
@@ -645,7 +643,7 @@ class BasicTrainer:
 
         print(f"\nTest finished. Average loss={TEST_LOSS}")
         
-        with open(f"{self.save_path}{self.name}_{self.valid_phases['default_test'].name}_test.txt", 'w') as logfile:
+        with open(f"{self.save_path}{self.name}_{self.valid_phases['test'].name}_test.txt", 'w') as logfile:
             logfile.write(f"{self.notion}_{self.name}\n"
             f"Start time = {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Final test losses:\n"

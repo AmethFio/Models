@@ -12,7 +12,7 @@ class NCC:
     def __init__(self):
         self.eps = 1e-8
 
-    def __forward__(self, source_shape, target_shape):
+    def __call__(self, source_shape, target_shape):
 
         target_shape = target_shape.reshape(target_shape.shape[0], -1)
         source_shape = source_shape.reshape(source_shape.shape[0], -1)
@@ -204,6 +204,7 @@ class PairwiseIoU:
         iou = (intersection + self.eps) / (union + self.eps)
         return iou
     
+
 class MMDLoss:
     def __init__(self, sigma=1.0):
         self.sigma = sigma
