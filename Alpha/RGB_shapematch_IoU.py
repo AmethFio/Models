@@ -86,9 +86,9 @@ class ShapeCoordLoss:
             max_sim_values, shp_indices = iou.max(dim=1)
             sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
 
-            match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices][shp_indices])
-            match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices][shp_indices])
-            match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices][shp_indices])
+            match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
+            match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
+            match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
 
         return match_fea_loss, match_mu_loss, match_logvar_loss
                     

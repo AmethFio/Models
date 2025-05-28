@@ -584,8 +584,7 @@ class DANN_Loader:
         if target_guide:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
-        if few_shot_target:
-            self.target_batch = None
+        self.target_batch = None
         
     def __iter__(self):
         return self
