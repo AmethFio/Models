@@ -208,8 +208,8 @@ class IoU:
             intersection = torch.matmul(target_flat, pred_flat.T)
 
             # Compute areas
-            area_a = a_flat.sum(dim=1)  # (m,)
-            area_b = b_flat.sum(dim=1)  # (n,)
+            area_a = pred_flat.sum(dim=1)  # (m,)
+            area_b = target_flat.sum(dim=1)  # (n,)
 
             # Compute union: (n, m)
             union = area_a.unsqueeze(0) + area_b.unsqueeze(1) - intersection
