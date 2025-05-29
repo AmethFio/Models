@@ -9,7 +9,7 @@ import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Structure.Model import *
 from Loss import MyLossLog, MyLossCTR
-from Alpha.Losses import PairwiseIoU, NCC
+from Alpha.Losses import IoU, NCC
 
 from torch.autograd import Function
 
@@ -50,7 +50,7 @@ class ShapeCoordLoss:
         self.mode = mode
         self.device = device
         self.recon_lossfunc = nn.MSELoss()
-        self.iou_loss = NCC()
+        self.iou_loss = NCC(pairwise=True)
 
     def weighted_loss(self, weight, est, gt):
         return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
@@ -75,7 +75,8 @@ class ShapeCoordLoss:
         elif self.mode == 's':
             iou = self.iou_loss(source_shape, target_shape)
             max_sim_values, indices = iou.max(dim=1)
-            sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+            if self.iou_loss._name == 'NCC':
+                sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
 
             match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
             match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
@@ -83,8 +84,9 @@ class ShapeCoordLoss:
 
         elif self.mode == 'cs':
             iou = self.iou_loss(source_shape[indices], target_shape)
-            max_sim_values, shp_indices = iou.max(dim=1)
-            sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
+            max_sim_values, shp_indices = iou.max(dim=-1)
+            if self.iou_loss._name == 'NCC':
+                sim_weight = max_sim_values / 2 + 0.5  # Rearrange into (0, 1)
 
             match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
             match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
@@ -338,7 +340,7 @@ class StudentTrainer(BasicTrainer):
         self.sample_mse = nn.MSELoss(reduction='none')
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
         self.adv = nn.CrossEntropyLoss()
-        self.iou_loss = PairwiseIoU()
+
         self.shapecoord = shapecoord
         self.shape_coord_loss = ShapeCoordLoss(mode=shapecoord, device=self.device)
 

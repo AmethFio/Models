@@ -9,8 +9,12 @@ class NCC:
     """
     Normalized Cross Correlation Loss
     """
-    def __init__(self):
+
+    
+    def __init__(self, pairwise=False):
         self.eps = 1e-8
+        self.pairwise = pairwise
+        self._name = "NCC"
 
     def __call__(self, source_shape, target_shape):
 
@@ -22,10 +26,13 @@ class NCC:
         source_shape = source_shape - source_shape.mean(dim=1, keepdim=True)
 
         # Normalize (L2 norm)
-        target_shape_norm = target_shape / (target_shape.norm(dim=1, keepdim=True) + self.eps)
-        source_shape_norm = source_shape / (source_shape.norm(dim=1, keepdim=True) + self.eps)
+        target_shape_norm = target_shape / (target_shape.norm(dim=1, keepdim=True) + self.eps) # (M, D)
+        source_shape_norm = source_shape / (source_shape.norm(dim=1, keepdim=True) + self.eps) # (N, D)
 
-        ncc = torch.matmul(target_shape_norm, source_shape_norm.T)
+        if self.pairwise:
+            ncc = (target_shape_norm * source_shape_norm).sum(dim=1)  # (N,)
+        else:
+            ncc = torch.matmul(target_shape_norm, source_shape_norm.T) # (M, N)
 
         return ncc
         
@@ -168,14 +175,16 @@ class PostCoordLoss:
         return center_loss, depth_loss
 
 
-class PairwiseIoU:
-    def __init__(self, threshold=0.5, eps=1e-6):
+class IoU:
+    def __init__(self, threshold=0.5, eps=1e-6, pairwise=False):
         self.threshold = threshold
         self.eps = eps
+        self.pairwise=pairwise
+        self._name = 'IoU'
 
     def __call__(self, pred, target):
         """
-        Computes pairwise IoU between two sets of binary masks.
+        Computes IoU between two sets of binary masks.
 
         Args:
             group_a: Tensor of shape (m, H, W) - first group of masks
@@ -187,18 +196,23 @@ class PairwiseIoU:
         """
 
         # Flatten masks to (m, H*W) and (n, H*W)
-        a_flat = pred.view(pred.shape[0], -1).float()
-        b_flat = target.view(target.shape[0], -1).float()
+        pred_flat = pred.view(pred.shape[0], -1).float()
+        target_flat = target.view(target.shape[0], -1).float()
 
-        # Compute intersection: (n, m)
-        intersection = torch.matmul(b_flat, a_flat.T)
+        if self.pairwise:
+            intersection = (pred_flat * target_flat).sum(dim=1)
+            union = pred_flat.sum(dim=1) + target_flat.sum(dim=1) - intersection
 
-        # Compute areas
-        area_a = a_flat.sum(dim=1)  # (m,)
-        area_b = b_flat.sum(dim=1)  # (n,)
+        else:
+            # Compute intersection: (n, m)
+            intersection = torch.matmul(target_flat, pred_flat.T)
 
-        # Compute union: (n, m)
-        union = area_a.unsqueeze(0) + area_b.unsqueeze(1) - intersection
+            # Compute areas
+            area_a = a_flat.sum(dim=1)  # (m,)
+            area_b = b_flat.sum(dim=1)  # (n,)
+
+            # Compute union: (n, m)
+            union = area_a.unsqueeze(0) + area_b.unsqueeze(1) - intersection
 
         # Compute IoU
         iou = (intersection + self.eps) / (union + self.eps)
