@@ -15,7 +15,7 @@ from Loss import MyLossLog, MyLossCTR
 from Structure.StandardStudent import Student
 from Structure.StandardTeacher import Teacher
 from Models.Structure.Model import *
-from Models.Structure.ModModel import CSIEncoderConcat as CSIen
+from Models.Structure.ModModel import CSIEncoderHPool as CSIen
 from Alpha.Losses import NCCMSELoss, MMDLoss
 
 from Wasserstein import WGANCritic, WGANLoss

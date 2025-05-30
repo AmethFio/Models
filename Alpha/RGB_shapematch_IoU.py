@@ -46,11 +46,11 @@ Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
 class ShapeCoordLoss:
-    def __init__(self, mode='c', device='gpu:0'):
+    def __init__(self, mode='c', device='gpu:0', pairwise=False):
         self.mode = mode
         self.device = device
         self.recon_lossfunc = nn.MSELoss()
-        self.iou_loss = NCC(pairwise=False)
+        self.iou_loss = NCC(pairwise=pairwise)
 
     def weighted_loss(self, weight, est, gt):
         return (self.recon_lossfunc(est, gt) * weight.to(self.device)).sum() / weight.to(self.device).sum()
@@ -91,6 +91,34 @@ class ShapeCoordLoss:
             match_fea_loss = self.weighted_loss(sim_weight, target_fea, source_fea[indices])
             match_mu_loss = self.weighted_loss(sim_weight, target_mu, source_mu[indices])
             match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
+
+        elif self.mode == 'sc':
+            best_indices = []
+            sim_weights = []
+            iou = self.iou_loss(source_shape, target_shape)
+            topk_values, topk_indices = torch.topk(iou, k=5, dim=1)
+
+            for i in range(len(iou)):
+                target_vec = F.normalize(target_coord[i:i+1], p=2, dim=1)  # shape: (1, D)
+                source_candidates = source_coord[topk_indices[i]]         # shape: (5, D)
+                source_candidates = F.normalize(source_candidates, p=2, dim=1)
+
+                cos_sim = torch.matmul(target_vec, source_candidates.T).squeeze(0)  # shape: (5,)
+                best_idx_in_topk = torch.argmax(cos_sim)
+                best_source_idx = topk_indices[i][best_idx_in_topk].item()
+                best_indices.append(best_source_idx)
+
+                sim_weights.append(topk_values[i][best_idx_in_topk].item())  # 使用该匹配的IoU作为权重
+
+            best_indices = torch.tensor(best_indices, device=source_shape.device, dtype=torch.long)     # shape: (B,)
+            sim_weights = torch.tensor(sim_weights, device=source_shape.device, dtype=target_fea.dtype) # shape: (B,)
+            if self.iou_loss._name == 'NCC':
+                sim_weights = sim_weights / 2 + 0.5  # Rearrange into (0, 1)
+
+            match_fea_loss = self.weighted_loss(sim_weights, target_fea, source_fea[best_indices])
+            match_mu_loss = self.weighted_loss(sim_weights, target_mu, source_mu[best_indices])
+            match_logvar_loss = self.weighted_loss(sim_weights, target_logvar, source_logvar[best_indices])
+
 
         return match_fea_loss, match_mu_loss, match_logvar_loss
                     
@@ -328,6 +356,7 @@ class StudentTrainer(BasicTrainer):
                  alpha=0.8,
                  recon_lossfunc=nn.MSELoss(),
                  shapecoord='c',
+                 pairwise=True,
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
@@ -342,7 +371,7 @@ class StudentTrainer(BasicTrainer):
         self.adv = nn.CrossEntropyLoss()
 
         self.shapecoord = shapecoord
-        self.shape_coord_loss = ShapeCoordLoss(mode=shapecoord, device=self.device)
+        self.shape_coord_loss = ShapeCoordLoss(mode=shapecoord, device=self.device, pairwise=pairwise)
 
         self.loss_terms = ('LOSS', 'MU', 'LOGVAR', 'LATENT', 'FEATURE', 'IMG', 'CTR', 'DPT', 'DOM', 'DOM_ACC', 'TG_LOSS', 'TG_FEA', 'TG_LAT', 'TG_CTR', 'TG_DPT')
         self.pred_terms = ('C_GT', 'R_GT',
