@@ -586,11 +586,14 @@ class DANN_Loader:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
         if self.few_shot_target:
-            try:
-                self.target_batch = copy.deepcopy(next(self.target_iter))
-            except StopIteration:
-                self.target_iter = iter(self.target_loader)
-                self.target_batch = next(self.target_iter)
+            self.few_data = [next(self.target_iter) for _ in range(5)]
+            self.few_iter = iter(self.few_data)
+
+            # try:
+            #     self.target_batch = copy.deepcopy(next(self.few_iter))
+            # except StopIteration:
+            #     self.few_iter = iter(self.few_data)
+            #     self.target_batch = next(self.few_iter)
         
     def __iter__(self):
         return self
@@ -628,7 +631,13 @@ class DANN_Loader:
 
 
         if self.few_shot_target:
-            target_data = copy.deepcopy(self.target_batch)
+            # target_data = copy.deepcopy(self.target_batch)
+
+            try:
+                target_data = next(self.few_iter)
+            except StopIteration:
+                self.few_iter = iter(self.few_data)  # Reset the iterator
+                target_data = next(self.few_iter) 
 
         else:
             # Get Target
