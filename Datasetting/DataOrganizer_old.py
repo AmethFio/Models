@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy import signal
 import os
+import copy
 from PIL import Image
 import pickle
 from pandas.compat import pickle_compat
@@ -584,7 +585,12 @@ class DANN_Loader:
         if target_guide:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
-        self.target_batch = None
+        if self.few_shot_target:
+            try:
+                self.target_batch = copy.deepcopy(next(self.target_iter))
+            except StopIteration:
+                self.target_iter = iter(self.target_loader)
+                self.target_batch = next(self.target_iter)
         
     def __iter__(self):
         return self
@@ -620,16 +626,21 @@ class DANN_Loader:
             source_batch = {key: torch.cat([source_batch[key], target_guide[key]], dim=0)
                             for key in source_batch}
 
-        # Get Target
-        try:
-            target_data = next(self.target_iter)
-            if self.target_batch is None:
-                self.target_batch = target_data
 
-        except StopIteration:
-            self.target_iter = iter(self.target_loader)  # Reset the iterator
-            target_data = next(self.target_iter)         # Get the first batch again
+        if self.few_shot_target:
+            target_data = copy.deepcopy(self.target_batch)
 
+        else:
+            # Get Target
+            try:
+                target_data = next(self.target_iter)
+
+            except StopIteration:
+                self.target_iter = iter(self.target_loader)  # Reset the iterator
+                target_data = next(self.target_iter)         # Get the first batch again
+  
+        # print(source_batch['csi'].dtype, source_batch['csi'].shape, 
+        # target_data['csi'].dtype, target_data['csi'].shape)
         return source_batch, target_data
 
         
@@ -644,7 +655,6 @@ class DANN_Loader:
         if self.target_guide:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
-        
     
 class DataOrganizerDANN(DataOrganizer):
     def __init__(self, *args, **kwargs):
