@@ -46,7 +46,7 @@ Domain_classifier_train = ['dmnde']
 Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 
 class ShapeCoordLoss:
-    def __init__(self, mode='c', device='gpu:0', pairwise=False):
+    def __init__(self, mode='c', device='gpu:0', pairwise=True):
         self.mode = mode
         self.device = device
         self.recon_lossfunc = nn.MSELoss()
@@ -83,7 +83,7 @@ class ShapeCoordLoss:
             match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
 
         elif self.mode == 'cs':
-            iou = self.iou_loss(source_shape, target_shape)
+            iou = self.iou_loss(source_shape[indices], target_shape)
             sim_weight, shp_indices = iou.max(dim=-1)
             if self.iou_loss._name == 'NCC':
                 sim_weight = sim_weight / 2 + 0.5  # Rearrange into (0, 1)
@@ -118,7 +118,6 @@ class ShapeCoordLoss:
             match_fea_loss = self.weighted_loss(sim_weights, target_fea, source_fea[best_indices])
             match_mu_loss = self.weighted_loss(sim_weights, target_mu, source_mu[best_indices])
             match_logvar_loss = self.weighted_loss(sim_weights, target_logvar, source_logvar[best_indices])
-
 
         return match_fea_loss, match_mu_loss, match_logvar_loss
                     
@@ -193,11 +192,8 @@ class CSIEncoder(nn.Module):
 
         self.lstm = nn.LSTM(self.lstm_feature_length, self.csi_feature_length, 2, batch_first=True, dropout=0.1)
         
-        self.fc_feature = nn.Sequential(
-            nn.Linear(self.csi_feature_length + self.pd_feature_length, 
-                      self.feature_length),
-            nn.ReLU()
-        )
+        self.fc_feature = GEGLU_proj(self.csi_feature_length * 3 + self.pd_feature_length, 
+                       self.feature_length)
         
         self.fc_pd = nn.Sequential(
             nn.Linear(self.pd_length, self.pd_feature_length),
@@ -217,23 +213,31 @@ class CSIEncoder(nn.Module):
         # self.fc_coord = nn.Linear(2, 16) # x and d
 
     def __str__(self):
-        return f"CSIEN{version}"
+        return f"CSIENHP{version}"
 
     def forward(self, csi, pd):
         fea_csi = self.cnn(csi)
         fea_pd = self.fc_pd(pd)
         # fea_ctr = self.fc_coord(torch.cat((ctr[..., 0], dpt)), -1)
-        csi_features, (final_hidden_state, final_cell_state) = self.lstm.forward(
-            fea_csi.view(-1, 512 * 7, self.lstm_steps).transpose(1, 2))
+        lstm_out, (final_hidden_state, final_cell_state) = self.lstm.forward(
+            fea_csi.view(-1, 512*7, 75).transpose(1, 2))
+
+        chunks = torch.chunk(lstm_out, 3, dim=1)
+        summaries = [chunk.mean(dim=1) for chunk in chunks]
+        features = torch.cat(summaries, dim=1)
+
+        out = torch.cat((features.view(-1, self.csi_feature_length * 3), fea_pd.view(-1, self.pd_feature_length)), -1)
+        out = self.fc_feature(out)
+
         # 256-dim output
-        features = torch.cat((csi_features[:, -1, :].view(-1, self.csi_feature_length), fea_pd.view(-1, self.pd_feature_length)), -1)
-        out = self.fc_feature(features)
+        dann_features = torch.cat((lstm_out[:, -1, :].view(-1, self.csi_feature_length), 
+        fea_pd.view(-1, self.pd_feature_length)), -1)
         
         mu = self.fc_mu(out)
         logvar = self.fc_logvar(out)
         z = reparameterize(mu, logvar)
 
-        return out, features.reshape(-1, 256), z, mu, logvar
+        return out, dann_features.reshape(-1, 256), z, mu, logvar
 
 
 class DomainClassifier(nn.Module):
@@ -356,7 +360,7 @@ class StudentTrainer(BasicTrainer):
                  alpha=0.8,
                  recon_lossfunc=nn.MSELoss(),
                  shapecoord='c',
-                 pairwise=False,
+                 pairwise=True,
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
