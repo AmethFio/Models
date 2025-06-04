@@ -568,7 +568,7 @@ class DANN_Loader:
     Can combine guide batch with source.
     """
     
-    def __init__(self, source_loader, target_loader, source_rate=3, target_guide=False, target_guide_num=1, few_shot_target=False):
+    def __init__(self, source_loader, target_loader, source_rate=3, target_guide=False, target_guide_num=1, few_shot_target=False, few_shot_num=1):
         self.source_loader = source_loader
         self.target_loader = target_loader
         self.source_iter = iter(self.source_loader)
@@ -579,6 +579,7 @@ class DANN_Loader:
         self.source_rate = source_rate
         
         self.few_shot_target = few_shot_target
+        self.few_shot_num = few_shot_num
         self.target_guide_batch = None
         self.target_guide = target_guide
         self.target_guide_num = target_guide_num
@@ -586,7 +587,7 @@ class DANN_Loader:
             self.guide_batch = [next(self.target_iter) for _ in range(self.target_guide_num)]
             self.guide_iter = iter(self.guide_batch)
         if self.few_shot_target:
-            self.few_data = [next(self.target_iter) for _ in range(5)]
+            self.few_data = copy.deepcopy([next(self.target_iter) for _ in range(self.few_shot_num)])
             self.few_iter = iter(self.few_data)
 
             # try:
@@ -634,10 +635,10 @@ class DANN_Loader:
             # target_data = copy.deepcopy(self.target_batch)
 
             try:
-                target_data = next(self.few_iter)
+                target_data = copy.deepcopy(next(self.few_iter))
             except StopIteration:
-                self.few_iter = iter(self.few_data)  # Reset the iterator
-                target_data = next(self.few_iter) 
+                self.few_iter = copy.deepcopy(iter(self.few_data))  # Reset the iterator
+                target_data = copy.deepcopy(next(self.few_iter)) 
 
         else:
             # Get Target
