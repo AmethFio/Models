@@ -242,11 +242,16 @@ class ImageDecoder(nn.Module):
 
         # 512 * 16 * 16
         # 256 * 16 * 16
+        # Re
         # 256 * 32 * 32
         # 128 * 32 * 32
+        # Re
         # 128 * 64 * 64
+        # Re
         # 128 * 128 * 128
+        # Re
         # 1 * 128 * 128
+        # Re
 
         self.fclayers = nn.Sequential(nn.Linear(self.latent_dim, 512 * 16 * 16))
 
@@ -308,8 +313,11 @@ class CSIEncoder(nn.Module):
 
         # 6 * 30 * 100
         # 128 * 28 * 98
+        # Re
         # 256 * 14 * 49
+        # Re
         # 512 * 7 * 25
+        # Re
 
         self.cnn = nn.Sequential(
             nn.Conv2d(6, 128, 5, 1, 1),

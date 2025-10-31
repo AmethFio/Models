@@ -6,7 +6,7 @@ import numpy as np
 import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog
-from Model import *
+from Structure.Model import *
 import torch.nn.functional as F
 
 
@@ -65,7 +65,8 @@ class Preprocess:
         data['rimg'] = self.transform(data['rimg'])
 
         # CSI: Extract amp and phase
-        data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=2) 
+        data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=-1) 
+        # 20 * 60 * 3
 
         return data
 
@@ -185,11 +186,16 @@ class ImageDecoder(nn.Module):
         # 6 * 16 * 16
         # 512 * 16 * 16
         # 256 * 16 * 16
+        # Re
         # 256 * 32 * 32
         # 128 * 32 * 32
+        # Re
         # 128 * 64 * 64
+        # Re
         # 128 * 128 * 128
+        # Re
         # 1 * 128 * 128
+        # Re
 
         self.fclayers = nn.Sequential(
             nn.Linear(self.latent_dim, 512 * 16 * 16),
@@ -216,9 +222,9 @@ class Person3DMod(nn.Module):
             self.csien = self.csien.to(device)
             self.imgde = self.imgde.to(device)
 
-    def forward(self, data):
+    def forward(self, csi):
         
-        x, z = self.csien(data['csi'])
+        x, z = self.csien(csi)
         recon = self.imgde(z)
 
         ret = {
@@ -259,7 +265,7 @@ class P3DModTrainer(BasicTrainer):
         
     def calculate_loss(self, data):
         
-        ret = self.model(data)
+        ret = self.model(data['csi'])
         recon_loss = self.recon_lossfunc(ret['re_img'], data['rimg']) / ret['re_img'].shape[0]
             
         TEMP_LOSS = {

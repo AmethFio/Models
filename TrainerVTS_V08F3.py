@@ -183,11 +183,17 @@ class StudentTrainer(BasicTrainer):
         
         # self.early_stopping_trigger = 'target'
         
+        # self.latent_weight = 0.1
+        # self.img_weight = 1.
+        # self.center_weight = 1.
+        # self.depth_weight = 1.
+        # self.feature_weight = 1.
+
         self.latent_weight = 0.1
-        self.img_weight = 1.
-        self.center_weight = 1.
-        self.depth_weight = 1.
-        self.feature_weight = 1.
+        self.img_weight = 1.e-4
+        self.center_weight = 40.
+        self.depth_weight = 50.
+        self.feature_weight = 10
 
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.recon_lossfunc(mu_s, mu_t) / mu_s.shape[0]

@@ -5,7 +5,7 @@ import numpy as np
 import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLossLog
-from Models.Structure.Model import *
+from Structure.Model import *
 import torch.nn.functional as F
 
 
@@ -57,8 +57,8 @@ class Preprocess:
 
         # CSI: Window length = 100, 3 rx
         # CSI: Extract amp and phase
-        data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=-2)
-        data['csi'] = data['csi'].permute(0, 2, 1, 3) # batch * sub * packet * rx
+        data['csi'] = torch.cat((torch.abs(data['csi']), torch.angle(data['csi'])), dim=-1)
+        data['csi'] = data['csi'].permute(0, 2, 1, 3) # batch * 2 * sub * packet * rx
 
         return data
 
@@ -162,9 +162,9 @@ class WiPoseMod(nn.Module):
             self.csien = self.csien.to(device)
             self.imgde = self.imgde.to(device)
 
-    def forward(self, data):
+    def forward(self, csi):
         
-        lat, z = self.csien(data['csi'])
+        lat, z = self.csien(csi)
         recon = self.imgde(z)
 
         ret = {
@@ -202,7 +202,7 @@ class WiPoseModTrainer(BasicTrainer):
         
     def calculate_loss(self, data):
         
-        ret = self.model(data)
+        ret = self.model(data['csi'])
         recon_loss = self.recon_lossfunc(ret['re_img'], data['rimg']) / ret['re_img'].shape[0]
             
         TEMP_LOSS = {

@@ -83,7 +83,7 @@ class ShapeCoordLoss:
             match_logvar_loss = self.weighted_loss(sim_weight, target_logvar, source_logvar[indices])
 
         elif self.mode == 'cs':
-            iou = self.iou_loss(source_shape[indices], target_shape)
+            iou = self.iou_loss(source_shape, target_shape)
             sim_weight, shp_indices = iou.max(dim=-1)
             if self.iou_loss._name == 'NCC':
                 sim_weight = sim_weight / 2 + 0.5  # Rearrange into (0, 1)
