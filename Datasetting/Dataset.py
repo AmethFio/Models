@@ -103,6 +103,7 @@ class MyDataset(Dataset):
                  data,
                  label,
                  csi_len=300,
+                 img_len=1,
                  single_pd=True,
                  mask_csi=MASK_CSI,
                  simple_mode=False,
@@ -112,6 +113,7 @@ class MyDataset(Dataset):
         self.label = label
         self.alignment = 'tail'
         self.csi_len = csi_len
+        self.img_len = img_len
         self.single_pd = single_pd
         
         self.mask_csi = mask_csi
@@ -251,5 +253,70 @@ class Preprocess:
                 data['csi'] = csi
         
         return data
+    
+
+class MyDatasetFLOW(Dataset):
+    """
+    DATASET wrapper
+    Load CSI, IMG series
+    """
+
+    def __init__(self,
+                 data,
+                 label,
+                 csi_len=300,
+                 img_len=10,
+                 *args, **kwargs):
+
+        self.data = data
+        self.label = label
+        self.csi_len = csi_len
+        self.img_len = img_len
+        
+        self.subject_code = subject_code
+        self.env_code = env_code
+
+    def __getitem__(self, index):
+        """
+        On-the-fly: select windowed CSI
+        """
+        # Tag codes
+        ret: dict = {}
+        tag =  self.label.iloc[index][['env', 'subject', 'group', 'segment', 'img_inds']]
+        tag['env'] = self.env_code[tag['env']]
+        tag['subject'] = self.subject_code[tag['subject']]
+        ret['tag'] = tag.to_numpy().astype(int)
+        
+        # return the absolute index of sample
+        ret['ind'] = self.label.index[index]
+        
+        # Label = ['env', 'subject', 'bag', 'csi', 
+        # 'group', 'segment', 'timestamp', 'img_inds', 'csi_inds']
+
+        bag = self.label.iloc[index]['bag']
+        img_ind = int(self.label.iloc[index]['img_inds'])
+        csi = self.label.iloc[index]['csi']
+        csi_ind = int(self.label.iloc[index]['csi_inds'])
+
+        pseudo_csi_ind = np.arange(csi_ind - self.csi_len, csi_ind, dtype=int)
+        pseudo_img_ind = np.arange(img_ind - 10, img_ind)
+        start_img_offset = 0
+        for i in range(index - 10, index):
+            temp_csi_ind = int(self.label.iloc[i]['csi_inds'])
+            if temp_csi_ind < pseudo_csi_ind[0]:
+                start_img_ind = index - i
+
+        # Rearrange 10 images: copy the first image
+        if start_img_offset != 10:
+            pseudo_img_ind[:start_img_offset] = pseudo_img_ind[start_img_offset]
+
+        ret['csi'] = np.copy(data['csi'][csi][pseudo_csi_ind])
+        ret['rimg'] = np.copy(data['rimg'][bag][pseudo_img_ind])
+        ret['rimg'] = ret['rimg'][np.newaxis, ...]
+                
+        return ret
+
+    def __len__(self):
+        return len(self.label)
     
     

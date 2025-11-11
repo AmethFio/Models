@@ -131,6 +131,8 @@ class DataOrganizer:
             self.dstype = MyDataset
         elif dstype == 'mopoe':
             self.dstype = MoPoEDataset
+        elif dstype == 'flow':
+            self.dstype = MyDatasetFLOW
         
         # Data-Modality-Name
         self.data: dict = {}
