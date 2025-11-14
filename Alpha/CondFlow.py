@@ -6,6 +6,8 @@ import os
 from Trainer import BasicTrainer, TrainingPhase, ValidationPhase
 from Loss import MyLoss
 import torch.nn.functional as F
+import torch.fft as fft
+from CondFlowModels import *
 
 class TeacherTrainer(BasicTrainer):
     def __init__(self,
@@ -112,6 +114,53 @@ class MMDLoss(nn.Module):
     	YX = kernels[batch_size:, :batch_size]
     	loss = torch.mean(XX + YY - XY -YX)
     	return loss
+ 
+ 
+class StudentPretrainer(BasicTrainer):
+    def __init__(self, *args, **kwargs):
+        super(StudentPretrainer, self).__init-_(*args, **kwargs)
+        
+        self.modality = {'csi'}
+        
+        self.loss_terms = ()
+        self.pred_terms = ('CSI_GT', 'CSI_PRED')
+        
+        self.csi_loss = None
+        
+        self.losslog = MyLoss(name=self.name, loss_terms=self.loss_terms,pred_terms=self.pred_terms)
+        
+        self.encoder = SpatioTemporalCompressor()
+        self.decoder = CSIDecoder()
+        self.encoder.to(self.device)
+        self.decoder.to(self.device)
+       
+        self.models = {'csien': self.encoder,
+                       'cside': self.decoder}
+        
+        self.training_phases =  {'main': TrainingPhase(name = 'main',
+                                                            train_module = ['csien', 'cside'],
+                                                            eval_module = [],
+                                                            verbose=False
+                                                            )}
+       
+    def fft_loss(x, x_hat, lambda_t=0.3, lambda_f=0.7):
+        # 时域 L1
+        loss_t = F.l1_loss(x_hat, x)
+
+        # 频域 L1（使用复频谱模值）
+        X = torch.abs(fft.rfft(x, dim=-1))
+        X_hat = torch.abs(fft.rfft(x_hat, dim=-1))
+        loss_f = F.l1_loss(X_hat, X)
+
+        return lambda_t * loss_t + lambda_f * loss_f
+       
+    def calculate_loss(self, data):
+        csi_fea = self.encoder(data['csi'])
+        recon = self.decoder(csi_fea)
+        
+        fft_loss = self.fft_loss(recon, data['csi'])
+        
+        
 
 
 class StudentTrainer(BasicTrainer):
@@ -119,7 +168,7 @@ class StudentTrainer(BasicTrainer):
                  *args, **kwargs):
         super(StudentTrainer, self).__init__(*args, **kwargs)
 
-        self.modality = {'cimg', 'rimg', 'csi', 'center', 'depth', 'pd', 'tag', 'ctr', 'dpt', 'ind'}
+        self.modality = {'rimg', 'csi', 'tag', 'ind'}
 
         self.loss_terms = ('LOSS', 'Z_PROB', 'JACOB', 'FEA_MMD', 'RECON')
         self.pred_terms = ('R_GT',
@@ -204,3 +253,50 @@ class StudentTrainer(BasicTrainer):
             if autosave:
                 for filename, fig in figs.items():
                     fig.savefig(f"{self.save_path}{filename}")
+                    
+
+class CSIAugmentation:
+    def __init__(self, noise_std=0.01, jitter_prob=0.5, jitter_shift=5, norm_mode='per_sample'):
+        """
+        Args:
+            noise_std: 高斯噪声标准差（相对输入值幅度）
+            jitter_prob: 时间抖动概率
+            jitter_shift: 最大时间平移步数
+            norm_mode: 'per_sample' 或 'global'，幅度归一化方式
+        """
+        self.noise_std = noise_std
+        self.jitter_prob = jitter_prob
+        self.jitter_shift = jitter_shift
+        self.norm_mode = norm_mode
+
+    def add_gaussian_noise(self, x):
+        """加性高斯噪声"""
+        noise = torch.randn_like(x) * self.noise_std
+        return x + noise
+
+    def time_jitter(self, x):
+        """时间抖动（随机平移 + 环绕）"""
+        if random.random() < self.jitter_prob:
+            shift = random.randint(-self.jitter_shift, self.jitter_shift)
+            x = torch.roll(x, shifts=shift, dims=-1)
+        return x
+
+    def amplitude_normalization(self, x):
+        """幅度归一化"""
+        if self.norm_mode == 'per_sample':
+            mean = x.mean(dim=(-1, -2), keepdim=True)
+            std = x.std(dim=(-1, -2), keepdim=True) + 1e-6
+            return (x - mean) / std
+        elif self.norm_mode == 'global':
+            mean = x.mean()
+            std = x.std() + 1e-6
+            return (x - mean) / std
+        else:
+            raise ValueError("norm_mode should be 'per_sample' or 'global'")
+
+    def __call__(self, x):
+        """对输入 CSI 执行全部增强"""
+        x = self.add_gaussian_noise(x)
+        x = self.time_jitter(x)
+        x = self.amplitude_normalization(x)
+        return x

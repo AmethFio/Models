@@ -296,6 +296,142 @@ class CSIEncoder2D1D(nn.Module):
         return csi_fea
 
 
+#
+# Student: TCN + 2D Conv
+#
+
+# ---------------- TemporalBlock (TCN residual block) ----------------
+class TemporalBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1):
+        super().__init__()
+        padding = dilation * (kernel_size - 1) // 2
+        self.block = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, kernel_size, 
+            padding=padding, dilation=dilation),
+            nn.BatchNorm1d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(out_channels, out_channels, kernel_size,
+            padding=padding, dilation=dilation),
+            nn.BatchNorm1d(out_channels),
+        )
+
+        self.downsample = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        # x: (B, C, T)
+        out = self.block(x)
+        res = self.downsample(x)
+        out = self.relu(out + res)
+        return out
+
+# ---------------- Temporal downsampling module ----------------
+class TemporalDownsample(nn.Module):
+    """
+    输入: (B*H, C_in, T)  (we treat H spatial positions as batch)
+    输出: (B*H, C_out, 8)
+    """
+    def __init__(self, in_channels, mid_channels=128, out_channels=256):
+        super().__init__()
+        self.tblock1 = TemporalBlock(in_channels, mid_channels, kernel_size=3, dilation=1)
+        self.tblock2 = TemporalBlock(mid_channels, mid_channels, kernel_size=3, dilation=2)
+        self.tblock3 = TemporalBlock(mid_channels, out_channels, kernel_size=3, dilation=4)
+
+        # Several stride convs to reduce temporal length (we finish with AdaptiveAvgPool1d(8))
+        self.down = nn.Sequential(
+            nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1),  # ~ /2
+            nn.ReLU(inplace=True),
+            nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1),  # ~ /2
+            nn.ReLU(inplace=True),
+            nn.Conv1d(out_channels, out_channels, kernel_size=3, stride=2, padding=1),  # ~ /2
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool1d(8)  # 强制得到时间长度 = 8
+        )
+
+    def forward(self, x):
+        # x: (B*H, C_in, T)
+        x = self.tblock1(x)
+        x = self.tblock2(x)
+        x = self.tblock3(x)
+        x = self.down(x)  # (B*H, out_channels, 8)
+        return x
+
+# ---------------- Full spatio-temporal model ----------------
+class SpatioTemporalCompressor(nn.Module):
+    def __init__(self, in_channels=6, base_channels=32, temp_mid=128, temp_out=256, out_channels=128):
+        """
+        - in_channels: 输入通道 (每个时空点的特征数)
+        - base_channels: 空间卷积的基础通道数 (会变成 base*2 after 2 steps)
+        - temp_mid / temp_out: TCN 内部通道配置
+        - out_channels: 最终输出通道数（这里为 128）
+        """
+        super().__init__()
+        # --- 空间下采样: 30 -> 15 -> 8 (时间轴保持 300)
+        # stride=(2,1) 表示在空间方向下采样而不下采样时间
+        self.spatial_conv = nn.Sequential(
+            nn.Conv2d(in_channels, base_channels, kernel_size=(3,3), stride=(2,1), padding=(1,1)),  # 30 -> 15
+            nn.BatchNorm2d(base_channels),
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(base_channels, base_channels*2, kernel_size=(3,3), stride=(2,1), padding=(1,1)), # 15 -> 8
+            nn.BatchNorm2d(base_channels*2),
+            nn.ReLU(inplace=True),
+
+            # 可选的通道融合层
+            nn.Conv2d(base_channels*2, base_channels*2, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
+            nn.BatchNorm2d(base_channels*2),
+            nn.ReLU(inplace=True),
+        )
+
+        # 先扩通道数
+        self.temp_down = TemporalDownsample(in_channels=base_channels*2, mid_channels=temp_mid, out_channels=temp_out)
+
+        # 最后的 1x1 卷积把 temp_out -> out_channels (128)，保持空间8x时间8
+        self.final_proj = nn.Conv2d(temp_out, out_channels, kernel_size=1)
+
+    def forward(self, csi):
+        # x: (B, C_in, 30, 300)
+        B = x.size(0)
+        x = self.spatial_conv(x)          # -> (B, C_s, 8, 300)
+        _, C_s, H, T = x.shape            # H should be 8
+
+        # 按空间位置把时间当作 batch 处理： (B, C_s, H, T) -> (B*H, C_s, T)
+        x = x.permute(0, 2, 1, 3).contiguous()  # (B, H, C_s, T)
+        x = x.view(B * H, C_s, T)               # (B*H, C_s, T)
+
+        # 时间 TCN + downsample -> (B*H, temp_out, 8)
+        x = self.temp_down(x)
+
+        # 恢复到 (B, temp_out, H, 8)
+        temp_out_ch = x.size(1)
+        x = x.view(B, H, temp_out_ch, 8).permute(0, 2, 1, 3).contiguous()  # (B, temp_out, H, 8)
+
+        # 最终映射到目标通道数 (128)
+        x = self.final_proj(x)  # (B, out_channels=128, 8, 8)
+        return x
+
+
+#
+# CSI decoder, 预训练用
+#
+class CSIDecoder(nn.Module):
+    def __init__(self):
+        suter(CSIDecoder, self).__init__()
+
+        self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(128, 64, kernel_size=3, stride=(2,2), padding=1, output_padding=1),
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(64, 32, kernel_size=3, stride=(2,2), padding=1, output_padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(32, 6, kernel_size=3, padding=1)  # 输出形状近似 (B,1,30,300)
+            )
+
+    def forward(self, csi_fea):
+        recon = self.decoder(csi_fea)
+
+        return recon
+
+
 # -----------------------------------------------------
 # 子网络：生成 s 和 t，用于仿射变换
 # -----------------------------------------------------
