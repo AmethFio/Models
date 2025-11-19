@@ -36,6 +36,37 @@ def plot_settings(figsize=(20, 10)):
     fig = plt.figure(constrained_layout=True)
     return fig
 
+class PlotSettings:
+    def __init__(self):
+        mpl.rcParams['figure.figsize'] = figsize
+        mpl.rcParams["figure.titlesize"] = 35
+        mpl.rcParams['lines.markersize'] = 10
+        mpl.rcParams['axes.titlesize'] = 26
+        mpl.rcParams['axes.labelsize'] = 26
+        mpl.rcParams['xtick.labelsize'] = 20
+        mpl.rcParams['ytick.labelsize'] = 20
+
+    def __call__(self, title=None, ax_num=1):
+        _ = plt.figure()
+        fig = plt.figure(constrained_layout=True)
+        fig.suptitle(title)
+        fig, axes = self.gen_axes(fig, ax_num)
+        
+        return fig, axes
+
+    def gen_axes(self, fig, ax_num):
+
+        if ax_num > 3:
+            axes = fig.subplots(2, np.ceil(ax_num / 2).astype(int))
+        elif ax_num > 1 and ax_num <= 3:
+            axes = fig.subplots(1, ax_num)
+        else:
+            axes = flg.get_axes()
+
+        axes = axes.flatten()
+
+        return fig, axes
+
 
 def colors(arrays):
     """
