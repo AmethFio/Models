@@ -13,9 +13,32 @@ from tqdm.notebook import tqdm
 
 from LossLayer import LossTracker
 from Trainers import *
-from misc import timer, file_finder
 import time
 from datetime import timedelta, datetime
+
+def timer(func):
+    from functools import wraps
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__} elapsed: {end - start} sec")
+        return result
+
+    return wrapper
+
+def file_finder(path, func, process_name=None, *args, **kwargs):
+    process_name = f"{process_name}: " if process_name else ''
+    print(f"\033[32m{process_name}Loading {path}\033[0m")
+    res = []
+    for p, _, file_lst in os.walk(path):
+        for file_name in file_lst:
+            file_name_, ext = os.path.splitext(file_name)
+            # print(f"Processing {file_name}...")
+            res.append(func(os.path.join(p, file_name), file_name_, ext, *args, **kwargs))
+    return res
 
 class ModelNotFoundError(Exception):
     def __init__(self, message="\033[31mCheck path: did not load any model!\033[0m"):

@@ -45,10 +45,10 @@ class TorchSMMatrices:
         )
 
 class SMRemover:
-    def __init__(self):
-        self.sm_matrices = TorchSMMatrices()
+    def __init__(self, device):
+        self.sm = TorchSMMatrices(device)
 
-    def __call__(self, csi: torch.Tensor, rate: int, sm: TorchSMMatrices):
+    def __call__(self, csi: torch.Tensor, rate: int):
         """
         PyTorch GPU version of remove_sm.
         csi: (batch, nsub, nrx, ntx) or (nsub, nrx, ntx)
@@ -69,14 +69,14 @@ class SMRemover:
 
         if cond_40:
             if ntx == 3:
-                sm_mtx = sm.sm_3_40
+                sm_mtx = self.sm.sm_3_40
             else:
-                sm_mtx = sm.sm_2_40
+                sm_mtx = self.sm.sm_2_40
         else:
             if ntx == 3:
-                sm_mtx = sm.sm_3_20
+                sm_mtx = self.sm.sm_3_20
             else:
-                sm_mtx = sm.sm_2_20
+                sm_mtx = self.sm.sm_2_20
 
         # sm^H (transpose + conjugate)
         sm_H = sm_mtx.transpose(0, 1).conj()   # (ntx, ntx)
@@ -99,7 +99,7 @@ class CSIscaler:
         """
         self.device = device
         self.rate = rate
-        self.sm_remover = SMRemover()
+        self.sm_remover = SMRemover(device)
         self.csilist = None
         self.datetimelist = None
 
@@ -138,7 +138,7 @@ class CSIscaler:
         # ---- multiply_ntx ----
         multiply_ntx = torch.ones(N, device=device)
         multiply_ntx[ntx == 2] = torch.sqrt(torch.tensor(2.0, device=device))
-        multiply_ntx[ntx == 3] = torch.sqrt(10.0 ** (4.5 / 10.0))
+        multiply_ntx[ntx == 3] = torch.sqrt(torch.tensor(10.0 ** (4.5 / 10.0), device=device))
 
         scale_factor = torch.sqrt(scale / total_noise_pwr) * multiply_ntx
         scale_factor = scale_factor.view(N, 1, 1, 1)
@@ -192,7 +192,7 @@ class CSIscaler:
         csilist = csilist.swapaxes(1, 3)
 
         if remove_sm:
-            csilist = self.sm_remover(csilist)
+            csilist = self.sm_remover(csilist, self.rate)
             print("removed sm")
 
         self.csilist = csilist
@@ -212,9 +212,13 @@ class CSIscaler:
         # I. Didive Tx1
         re_csi = (torch.abs(csi) + 1.e-6) * torch.exp(1.j * torch.angle(csi))
         if ref == 'rx':
-            csi = csi / re_csi[:, :, ref_ant, :][..., torch.newaxis, :].repeat(3, axis=2)
+            denom = re_csi[..., ref_ant, :].unsqueeze(-1)  # [..., 1]
+            denom = denom.repeat(1, 1, 3, 1)               # repeat 3 times
+            csi = csi / denom
         elif ref == 'tx':
-            csi = csi / re_csi[:, :, :, ref_ant][..., torch.newaxis].repeat(3, axis=3)
+            denom = re_csi[..., ref_ant].unsqueeze(-1)  # [..., 1]
+            denom = denom.repeat(1, 1, 1, 3)               # repeat 3 times along last dim
+            csi = csi / denom
 
         # II. High-pass filter with cupy
         csi_gpu = cp.asarray(csi)
@@ -224,6 +228,7 @@ class CSIscaler:
 
         dynamic_csi = cp.zeros_like(csi_gpu)
 
+        nsub, nrx, ntx = csi.shape[-3:]
         for sub in range(nsub):
             for rx in range(nrx):
                 for tx in range(ntx):
