@@ -1,5 +1,8 @@
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset, random_split
+import torch.nn.functional as F
+import os
+import numpy as np
 
 def sg_filter_gpu(csi, window_size=21, poly_order=3, dim=-3):
     """
@@ -77,6 +80,7 @@ def phase_difference_gpu(csi_real, csi_imag):
 
 
 
+
 class MyDatasetLite(Dataset):
     """
     DATASET wrapper
@@ -87,12 +91,14 @@ class MyDatasetLite(Dataset):
                  data,
                  csi_len=300,
                  img_len=1,
+                 img_size=(128, 128),
                  *args, **kwargs):
 
         self.data = data
         self.alignment = 'tail'
         self.csi_len = csi_len
         self.img_len = img_len
+        self.img_size = img_size
 
     def __getitem__(self, index):
         """
@@ -101,13 +107,21 @@ class MyDatasetLite(Dataset):
         ret: dict = {}
 
         ret['ind'] = index
-        ret['shape'] = ret['shape'][index].unsqueeze(1)
+        img = self.data['shape'][index]
+        ret['shape'] = self.transform(torch.from_numpy(img))
 
         csi_ind = self.data['ind'][index]
-        csi = self.data['csi'][csi_ind - self.csi_len, csi_ind]
+        csi = self.data['csi'][csi_ind - self.csi_len: csi_ind]
         ret['csi'], ret['pd'] = self.filter_csi(csi)
 
         return ret
+
+    def transform(self, tensor):
+        if tensor.dim() == 2:  
+            tensor = tensor.unsqueeze(0).unsqueeze(0)
+        elif tensor.dim() == 3:  
+            tensor = tensor.unsqueeze(0)
+        return F.interpolate(tensor, size=self.img_size, mode='bilinear', align_corners=False)
 
     def filter_csi(self, csi):
         csi_real = sg_filter_gpu(torch.real(csi))
@@ -125,14 +139,13 @@ class MyDatasetLite(Dataset):
         return csi, pd
 
     def __len__(self):
-        return len(self.data['ind'])
+        return len(self.data.get('ind', []))
 
 
 
 class MyDataLoaderLite:
-    def __init__(self, device='cuda'):
+    def __init__(self):
         self.data: dict = {}
-        self.device = device
 
     def load(self, path):
         paths = os.walk(path)
@@ -141,10 +154,13 @@ class MyDataLoaderLite:
             for file_name in file_lst:
                 file_name_, ext = os.path.splitext(file_name)
 
-                if ext == 'npy':
-                    self.data[file_name_] = torch.from_numpy(np.load(os.path.join(path, file_name))).to(device=self.device)
+                if ext == '.npy':
+                    self.data[file_name_] = np.load(os.path.join(path, file_name))
 
-                print(f'Loaded {file_name}')
+                    print(f'Loaded {file_name}')
+
+        if 'matched_inds' in self.data.keys():
+            self.data['ind'] = self.data['matched_inds']
 
         print(f"\nLoad complete!")
 
@@ -153,7 +169,7 @@ class MyDataLoaderLite:
         Simple case: only generates train/valid loader or test loader at once.
         For test loader, specify split_ratio=1.
         """
-        dataset = MyDataLoaderLite(data)
+        dataset = MyDatasetLite(self.data)
         train_size, valid_size, test_size = 0, 0, 0
         train_loader, valid_loader, test_loader = None, None, None
 

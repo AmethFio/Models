@@ -1,11 +1,5 @@
 import torch
-try:
-    from torch.amp import autocast, GradScaler
-    _autocast_arg = {'device_type': 'cuda'}
-except ImportError:
-    from torch.cuda.amp import autocast, GradScaler
-    _autocast_arg = {}
-
+import torch.nn as nn
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -50,7 +44,8 @@ class ModelTrainer:
     ModelTrainer = Trainer + Validator + Tester
     """
     def __init__(self,
-                name='Model', dataloader: dict={}, model: dict={}, preprocess=None,
+                name='Model', dataloader: dict={}, model: nn.Module=None, 
+                lr=1.e-4, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
                 notion=''):
 
         self.name = name
@@ -61,15 +56,21 @@ class ModelTrainer:
 
         self.dataloader = dataloader
         self.model = model
-        self.optimizer = torch.optim.Adam()
+        self.optimizer = None
+        self.lr = lr
+        self.device = device
 
-        self.preprocess = preprocess
-
-        self.trainer = Trainer(f"{self.name}_{self.notion}_TRAIN")
-        self.validator = Validator(f"{self.name}_{self.notion}_VALID")
-        self.tester = Tester(f"{self.name}_{self.notion}_TEST")
+        self.trainer = Trainer(f"{self.name}_{self.notion}_TRAIN", self.device)
+        self.validator = Validator(f"{self.name}_{self.notion}_VALID", self.device)
+        self.tester = Tester(f"{self.name}_{self.notion}_TEST", self.device)
 
         self.final_log: str = ""
+
+        self.set_optimizer()
+
+    def set_optimizer(self, optimizer=torch.optim.Adam):
+        optimizer = self.trainer.set_optimizer(self.model, optimizer, self.lr)
+        self.optimizer = optimizer
 
     @timer
     def train(self, epochs=100, early_stop=True, lr_decay=True, save_model=True, *args, **kwargs):
@@ -79,13 +80,13 @@ class ModelTrainer:
         self.final_log += f"{self.name}_{self.notion}\n"
         self.final_log += f"Start time = {start.strftime('%Y-%m-%d %H:%M:%S')}\n"
 
-        print(f"\033[32m=========={self.start_time.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Training starting==========\033[0m")
+        print(f"\033[32m=========={start.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Training starting==========\033[0m")
         for epoch in tqdm(range(1, epochs + 1), initial=1, dynamic_ncols=True):
             
-            for idx, loss in self.trainer(self.dataloader['train'], self.model, self.optimizer, self.preprocess):
+            for idx, loss in self.trainer(self.dataloader['train'], self.model, self.optimizer):
                 continue
 
-            for idx, loss in self.validator(self.dataloader['valid'], self.model, self.optimizer, self.preprocess, early_stop, lr_decay):
+            for idx, loss in self.validator(self.dataloader['valid'], self.model, self.optimizer, early_stop, lr_decay):
                 continue
         
         if save_model:
@@ -101,7 +102,7 @@ class ModelTrainer:
         start_time = datetime.fromtimestamp(start)
         print(f"\033[32m=========={start_time.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Test starting==========\033[0m")
             
-        for idx, loss in self.tester(self.dataloader['test'], self.model, self.preprocess):
+        for idx, loss in self.tester(self.dataloader['test'], self.model):
             continue
 
         print(f"\nTest finished.")
@@ -115,7 +116,7 @@ class ModelTrainer:
     def save(self, mode='checkpoint'):
         # mode = 'best' or 'chechpoint'
         print("Saving models...")
-        for modelname, model in self.model.items():
+        for modelname, model in self.model.get_modules():
             print(f"Saving {modelname}...")
             torch.save({
                 'model_state_dict': model.state_dict(),

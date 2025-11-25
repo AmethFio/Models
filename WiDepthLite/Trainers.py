@@ -1,4 +1,11 @@
 import torch
+try:
+    from torch.amp import autocast, GradScaler
+    _autocast_arg = {'device_type': 'cuda'}
+except ImportError:
+    from torch.cuda.amp import autocast, GradScaler
+    _autocast_arg = {}
+
 from LossLayer import LossTracker
 from functools import wraps
 from tqdm import tqdm
@@ -30,88 +37,111 @@ def with_progress_bar(bar_format=None):
 
 
 class ModelStep:
-    def __init__(self, train_module, eval_module):
-        self.train_module = train_module
-        self.eval_module = eval_module
+    def __init__(self):
+        pass
 
-    def data_preprocess(self, data, device, preprocess=None):
-        if preprocess:
-            data = preprocess(data)
+    def preprocess_cpu(self, data):
+        return data
+
+    def preprocess_gpu(self, data):
+        return data
+
+    def data_preprocess(self, data, device):
+        data = self.preprocess_cpu(self)
+        # Put batch onto GPU
 
         data = {key: value.to(torch.float32).to(device) for key, value in data.items()}
 
         if 'tag' in data:
             data['tag'] = data['tag'].to(torch.int32).to(device)
+
+        data = self.preprocess_gpu(self)
             
-        return data)
+        return data
 
-    def __call__(self, dataloader, model, optimizer, preprocess):
-        if self.train_module = 'all':
-            self.train_module = model.modules.keys()
-
-        if self.eval_module = 'all':
-            self.eval_module = model.modules.keys()
-
-        for train_m in self.train_module:
-            model.get(train_m).train()
-
-        for eval_m in self.eval_module:
-            model.get(eval_m).eval()
-
+    def __call__(self, dataloader, model, device, loss_tracker):
         for idx, data in enumerate(dataloader, 1):
             # Prepare data
-            _data_ = self.data_preprocess(data, preprocess)
+            _data_ = self.data_preprocess(data, device)
             # Calculate model output
-            loss, preds = model(_data_)
+            with autocast(**_autocast_arg):
+                preds, loss = model(_data_)
             # Log loss to buffer
-            self.loss_tracker.log_loss(loss)
+            loss_tracker.log_loss(loss)
+            # Log preds to buffer
+            loss_tracker.log_preds(preds)
 
             yield idx, loss['LOSS'].item()
 
 
 class Trainer:
-    def __init__(self, name='TRAIN', train_module='all', eval_module=[]):
+    def __init__(self, name='TRAIN', 
+                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                train_module='all', eval_module=[]):
         self.name = name
-        self.device = torch.device(f"cuda:{cuda}" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.preprocess = DataPreprocess()
-        self.step = ModelStep(train_module, eval_module)
+        self.step = ModelStep()
         self.scaler = GradScaler()
-        self.traim_module = train_module,
+
+        self.train_module = train_module
         self.eval_module = eval_module
+        self.already_set_optimizer = False
+
+    def set_optimizer(self, model, optimizer, lr):
+        if self.train_module == 'all':
+            self.train_module = list(model.get_modules().keys())
+
+        if self.eval_module == 'all':
+            self.eval_module = list(model.get_modules().keys())
+
+        trainable_params = []
+        for module in self.train_module:
+            for name, param in getattr(model, module).named_parameters():
+                param.requires_grad = True
+                trainable_params.append({'params': param, 'lr': lr})
+
+        for module in self.eval_module:
+            for name, param in getattr(model, module).named_parameters():
+                param.requires_grad = False
+
+        opt = optimizer(trainable_params, lr, amsgrad=False)
+        return opt
 
     def epoch_bahavior(self, optimizer):
         if len(self.loss_tracker.lr_change_log) == 0:
             self.lr_log(optimizer)
 
+        self.loss_tracker.current_epoch += 1
         epoch_loss = self.loss_tracker.get_epoch_mean()
-        loss = epoch_loss['LOSS']
-        # Update
-        if torch.isnan(loss):
-                print(f"Phase {self.name}: NaN value in loss, skipping update.")
+
+    @with_progress_bar()
+    def __call__(self, dataloader, model, optimizer):
+        for module in model.get_modules().keys():
+            getattr(model, module).train()
+
+        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
+            # Update
+            if torch.isnan(loss):
+                print(f"\033[31mPhase {self.name}: NaN value in loss, skipping update.\033[0m")
             elif not torch.isfinite(loss):
-                print(f"Phase {self.name}: Infinite value in loss, skipping update.")
-                
+                print(f"\033[31mPhase {self.name}: Infinite value in loss, skipping update.\033[0m")
             else:
                 self.scaler.scale(loss).backward()
                 self.scaler.step(optimizer)
                 self.scaler.update()
                 optimizer.zero_grad()
-
-    @with_progress_bar()
-    def __call__(self, dataloader, model, optimizer, preprocess):
-        for idx, loss in self.step(dataloader, model, optimizer, preprocess):
             yield idx, loss
+
         self.epoch_behavior(optimizer)
 
 
 class Validator:
-    def __init__(self, name='VALID'):
+    def __init__(self, name='VALID', device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
         self.name = name
-        self.device = torch.device(f"cuda:{cuda}" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.preprocess = DataPreprocess()
-        self.step = ModelStep(train_module=[], eval_module='all')
+        self.step = ModelStep()
 
         self.best_val_loss = torch.inf
         self.best_val_epoch = 0
@@ -134,29 +164,35 @@ class Validator:
             
 
     @with_progress_bar()
-    def __call__(self, dataloader, model, optimizer, preprocess, early_stop=False):
-        # Wrap the model step with other functions
-        for idx in self.step(dataloader, model, optimizer, preprocess):
+    def __call__(self, dataloader, model, optimizer, early_stop=False):
+        for module in model.get_modules().keys():
+            getattr(model, module).eval()
+
+        self.loss_tracker.reset_preds()
+
+        for idx in self.step(dataloader, model, self.device, self.loss_tracker):
             yield idx, loss
         self.epoch_behavior(loss, optimizer, early_stop, lr_decay)
 
 
 class Tester:
-    def __init__(self, name='TEST'):
+    def __init__(self, name='TEST', device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
         self.name = name
-        self.device = torch.device(f"cuda:{cuda}" if torch.cuda.is_available() else "cpu")
+        self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.preprocess = DataPreprocess()
-        self.step = ModelStep(train_module=[], eval_module='all')
+        self.step = ModelStep()
 
     def epoch_behavior(self):
         for key, value in self.loss_tracker.loss_buffer.buffer.items():
             self.loss_tracker.loss_buffer.buffer[key] = value.squeeze()
 
     @with_progress_bar()
-    def __call__(self, dataloader, model, preprocess):
-        # Wrap the model step with other functions
-        for idx in self.step(dataloader, model, optimizer, preprocess):
+    def __call__(self, dataloader, model):
+        for module in model.get_modules().keys():
+            getattr(model, module).eval()
+        self.loss_tracker.reset_loss()
+        self.loss_tracker.reset_preds()
+        for idx in self.step(dataloader, model, self.device, self.loss_tracker):
             yield idx, loss
         self.epoch_behavior()
 

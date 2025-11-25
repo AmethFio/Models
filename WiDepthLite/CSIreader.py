@@ -3,7 +3,7 @@ import numpy as np
 import warnings
 from scipy import signal
 import cupy as cp
-from cupyx.scipy.signal import filtfilt
+from cupyx.scipy.signal import butter, sosfiltfilt
 
 class TorchSMMatrices:
     def __init__(self, device):
@@ -201,11 +201,11 @@ class CSIscaler:
         return csilist, timelist, rssilist, datetimelist
 
     @staticmethod
-    def highpass(fs=1000, cutoff=2, order=5):
+    def highpass(fs=1000, cutoff=5, order=4):
         nyq = 0.5 * fs
         normal_cutoff = cutoff / nyq
-        b, a = signal.butter(order, normal_cutoff, btype='high', analog=False)
-        return b, a
+        sos = butter(order, normal_cutoff, btype='high', analog=False, output='sos')
+        return sos
 
     def preprocess(self, csi: torch.Tensor, ref='tx', ref_ant=1, ret='cpu'):
 
@@ -222,9 +222,7 @@ class CSIscaler:
 
         # II. High-pass filter with cupy
         csi_gpu = cp.asarray(csi)
-        b, a = self.highpass()
-        b = cp.asarray(b)
-        a = cp.asarray(a)
+        sos = cp.asarray(self.highpass())
 
         dynamic_csi = cp.zeros_like(csi_gpu)
 
@@ -232,7 +230,7 @@ class CSIscaler:
         for sub in range(nsub):
             for rx in range(nrx):
                 for tx in range(ntx):
-                    dynamic_csi[:, sub, rx, tx] = filtfilt(b, a, csi_gpu[:, sub, rx, tx])
+                    dynamic_csi[:, sub, rx, tx] = sosfiltfilt(sos, csi_gpu[:, sub, rx, tx])
         
         if ret == 'cpu':
             dynamic_csi = cp.asnumpy(dynamic_csi)

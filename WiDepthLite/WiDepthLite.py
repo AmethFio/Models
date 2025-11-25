@@ -46,7 +46,6 @@ class ImageEncoder(nn.Module):
         for [in_ch, out_ch, ks, st, pd] in block:
             if in_ch != 512:
                 cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm),
                             nn.LeakyReLU(inplace=True)])
             else:
                 cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd)])
@@ -107,11 +106,9 @@ class ImageDecoder(nn.Module):
         for [in_ch, out_ch, ks, st, pd] in block:
             if ks == 3:
                 cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm)
                             ])
             else:
                 cnn.extend([nn.ConvTranspose2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm),
                             nn.LeakyReLU(inplace=True)])
         
         self.cnn = nn.Sequential(*cnn, self.activate_func)
@@ -242,6 +239,11 @@ class Student(nn.Module):
         self.rimg_weight = 1.e-4
         self.feature_weight = 10
 
+    def get_modules(self):
+        return {'imgen': self.imgen,
+                'imgde': self.imgde,
+                'csien': self.csien}
+
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.latent_loss(mu_s, mu_t) / mu_s.shape[0]
         logvar_loss = self.latent_loss(logvar_s, logvar_t) / logvar_s.shape[0]
@@ -294,6 +296,10 @@ class Teacher(nn.Module):
 
         self.beta = 0.5
         self.img_weight = 1.e-3
+
+    def get_modules(self):
+        return {'imgen': self.imgen,
+                'imgde': self.imgde}
 
     def kl_loss(self, mu, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())

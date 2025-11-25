@@ -2,9 +2,39 @@ import torch
 import torch.nn as nn
 import os
 import numpy as np
-from misc import PlotSettings
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import cm
+
+# Figure Control
+class PlotSettings:
+    def __init__(self, figsize=(20, 10)):
+        mpl.rcParams['figure.figsize'] = figsize
+        mpl.rcParams["figure.titlesize"] = 35
+        mpl.rcParams['lines.markersize'] = 10
+        mpl.rcParams['axes.titlesize'] = 26
+        mpl.rcParams['axes.labelsize'] = 26
+        mpl.rcParams['xtick.labelsize'] = 20
+        mpl.rcParams['ytick.labelsize'] = 20
+
+    def __call__(self, title=None, ax_num=1):
+        _ = plt.figure()
+        fig = plt.figure(constrained_layout=True)
+        fig.suptitle(title)
+        fig, axes = self.gen_axes(fig, ax_num)
+        
+        return fig, axes
+
+    def gen_axes(self, fig, ax_num):
+        if ax_num > 3:
+            axes = fig.subplots(2, np.ceil(ax_num / 2).astype(int))
+        elif ax_num > 1 and ax_num <= 3:
+            axes = fig.subplots(1, ax_num)
+        else:
+            axes = flg.get_axes()
+        axes = axes.flatten()
+        return fig, axes
+
 
 # Examplar Loss Layer
 class MyLossModule(nn.Module):
@@ -32,7 +62,7 @@ class LossBuffer:
     def __init__(self, device='cuda'):
         self.device = device
         self.buffer = {}  # {"mse": [tensor], "l1": [tensor], ...}
-        self.whole_log = {}
+        self.epoch_log = {}
 
     def add(self, loss_dict):
         for k, v in loss_dict.items():
@@ -48,9 +78,9 @@ class LossBuffer:
             losses = torch.stack(v_list)  # GPU 上堆叠
 
             # Keep track of epoch loss
-            if k not in self.whole_log:
-                self.whole_log[k] = []
-            self.whole_log[k].append(losses.mean())
+            if k not in self.epoch_log:
+                self.epoch_log[k] = []
+            self.epoch_log[k].append(losses.mean())
 
             out[k] = losses.mean().item()  # CPU 上标量
         
@@ -66,7 +96,7 @@ class PredBuffer:
     def __init__(self, device='cuda'):
         self.device = device
         self.buffer = {}  # {"mse": [tensor], "l1": [tensor], ...}
-        self.whole_log = {}
+        self.epoch_log = {}
 
     def add(self, loss_dict):
         for k, v in loss_dict.items():
@@ -82,7 +112,7 @@ class PredBuffer:
             losses = torch.stack(v_list)  # GPU 上堆叠
             out[k] = losses.item()  # CPU 上标量
 
-        self.whole_log = out
+        self.epoch_log = out
         return out
 
     def reset(self):
@@ -259,9 +289,12 @@ class LossTracker:
         # Only keep the latest epoch preds
         self.pred_buffer.reset()
 
+    def reset_loss(self):
+        self.loss_tracker.reset()
+
     def plot_loss_track(self):
         # prepare for iterative use
-        cpu_losses = self.to_cpu(self.loss_buffer.whole_log)
+        cpu_losses = self.to_cpu(self.loss_buffer.epoch_log)
 
         title = f"{self.name}_TRAIN_LOSS@ep{self.current_epoch}"
         filename = f"{title}.jpg"
@@ -279,7 +312,7 @@ class LossTracker:
     def plot_preds(self, pred_terms='all', mode='train'):
         if pred_terms == 'all':
             pred_terms = list(self.pred_buffer.keys())
-        plot_preds = {key: value.whole_log for key, value in self.pred_buffer.items() if key in pred_terms}
+        plot_preds = {key: value.epoch_log for key, value in self.pred_buffer.items() if key in pred_terms}
         plot_preds = self.to_cpu(plot_preds)
 
         title = f"{self.name}_PREDS_{mode.upper()}@{self.current_epoch}"
@@ -301,9 +334,9 @@ class LossTracker:
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
-        # self.loss_buffer['train'].whole_log = {'loss1': [...]}
+        # self.loss_buffer['train'].epoch_log = {'loss1': [...]}
  
-        for key, value in self.targets[target][mode].whole_log.items():
+        for key, value in self.targets[target][mode].epoch_log.items():
             print(f"Saving {target}: {key} of len {len(value)}...")
             np.save(f"{save_path}_{target}_{mode}_{key}.npy", value.cpu().numpy())
         
