@@ -45,7 +45,7 @@ class ModelTrainer:
     """
     def __init__(self,
                 name='Model', dataloader: dict={}, model: nn.Module=None, 
-                lr=1.e-4, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+                lr=1.e-4, device=0,
                 notion=''):
 
         self.name = name
@@ -58,11 +58,11 @@ class ModelTrainer:
         self.model = model
         self.optimizer = None
         self.lr = lr
-        self.device = device
+        self.device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
 
-        self.trainer = Trainer(f"{self.name}_{self.notion}_TRAIN", self.device)
-        self.validator = Validator(f"{self.name}_{self.notion}_VALID", self.device)
-        self.tester = Tester(f"{self.name}_{self.notion}_TEST", self.device)
+        self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN")
+        self.validator = Validator(self.device, f"{self.name}_{self.notion}_VALID")
+        self.tester = Tester(self.device, f"{self.name}_{self.notion}_TEST")
 
         self.final_log: str = ""
 
@@ -71,6 +71,16 @@ class ModelTrainer:
     def set_optimizer(self, optimizer=torch.optim.Adam):
         optimizer = self.trainer.set_optimizer(self.model, optimizer, self.lr)
         self.optimizer = optimizer
+
+    def plot_train_valid_loss(self):
+        line_color = {
+            'train': 'blue',
+            'valid': 'orange',
+            'valid_target': 'green'
+        }
+        filename, fig = self.trainer.loss_tracker.plot_loss_track('blue', 'train')
+        filename, fig = self.validator.loss_tracker.plot_loss_track('orange', 'valid', fig, True)
+        return fig
 
     @timer
     def train(self, epochs=100, early_stop=True, lr_decay=True, save_model=True, *args, **kwargs):
@@ -86,16 +96,16 @@ class ModelTrainer:
             for idx, loss in self.trainer(self.dataloader['train'], self.model, self.optimizer):
                 continue
 
-            for idx, loss in self.validator(self.dataloader['valid'], self.model, self.optimizer, early_stop, lr_decay):
-                continue
+            for idx, loss, stop_flag in self.validator(self.dataloader['valid'], self.model, self.optimizer, early_stop, lr_decay):
+                if early_stop and stop_flag:
+                    break
+
+            if epoch % 10 == 0:
+                self.plot_train_valid_loss()
+                filename, fig = self.validator.loss_tracker.plot_preds(pred_terms=['IMG', 'GT'])
         
         if save_model:
             self.save(mode='best')
-
-    def plot_train_valid_loss(self):
-        filename, out_fig = self.trainer.loss_tracker.plot_loss_track('train')
-        filename, out_fig = self.validator.loss_tracker.plot_loss_track('valid')
-        plt.show()
 
     def test(self):
         start = time.time()

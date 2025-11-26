@@ -8,13 +8,9 @@ except ImportError:
 
 from LossLayer import LossTracker
 from functools import wraps
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 def with_progress_bar(bar_format=None):
-    """
-    Decorator for wrapping a generator function with tqdm progress bar.
-    The decorated function must yield (idx, loss).
-    """
     if bar_format is None:
         bar_format = '{desc}{percentage:3.0f}%|{bar}|[{elapsed}<{remaining}{postfix}]'
 
@@ -24,14 +20,13 @@ def with_progress_bar(bar_format=None):
             total = len(dataloader)
             print('')
             with tqdm(total=total, dynamic_ncols=True, bar_format=bar_format) as progress_bar:
-                for idx, loss in func(self, dataloader, *args, **kwargs):
+                for idx, loss, *_ in func(self, dataloader, *args, **kwargs):
                     progress_bar.set_postfix({
                         'batch': f"{idx}/{total}",
                         'loss': f"{loss:.4f}"
                     })
-                    progress_bar.n = idx
-                    progress_bar.refresh()
-                    yield idx, loss
+                    progress_bar.update(1)   # ← 正确推进进度条
+                    yield idx, loss, *_
         return wrapped
     return decorator
 
@@ -40,22 +35,17 @@ class ModelStep:
     def __init__(self):
         pass
 
-    def preprocess_cpu(self, data):
-        return data
-
     def preprocess_gpu(self, data):
         return data
 
     def data_preprocess(self, data, device):
-        data = self.preprocess_cpu(self)
         # Put batch onto GPU
-
-        data = {key: value.to(torch.float32).to(device) for key, value in data.items()}
+        data = {key: value.to(device=device, dtype=torch.float32) for key, value in data.items()}
 
         if 'tag' in data:
-            data['tag'] = data['tag'].to(torch.int32).to(device)
+            data['tag'] = data['tag'].to(torch.int32)
 
-        data = self.preprocess_gpu(self)
+        data = self.preprocess_gpu(data)
             
         return data
 
@@ -66,17 +56,16 @@ class ModelStep:
             # Calculate model output
             with autocast(**_autocast_arg):
                 preds, loss = model(_data_)
-            # Log loss to buffer
+            # Log into buffer
             loss_tracker.log_loss(loss)
-            # Log preds to buffer
             loss_tracker.log_preds(preds)
 
-            yield idx, loss['LOSS'].item()
+            # Return the total loss for update
+            yield idx, loss['LOSS']
 
 
 class Trainer:
-    def __init__(self, name='TRAIN', 
-                device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    def __init__(self, device, name='TRAIN',
                 train_module='all', eval_module=[]):
         self.name = name
         self.device = device
@@ -108,12 +97,9 @@ class Trainer:
         opt = optimizer(trainable_params, lr, amsgrad=False)
         return opt
 
-    def epoch_bahavior(self, optimizer):
-        if len(self.loss_tracker.lr_change_log) == 0:
-            self.lr_log(optimizer)
-
-        self.loss_tracker.current_epoch += 1
-        epoch_loss = self.loss_tracker.get_epoch_mean()
+    def epoch_behavior(self, optimizer):
+        lr = self.loss_tracker.log_lr_change(optimizer)
+        epoch_loss = self.loss_tracker.get_epoch_mean('train')
 
     @with_progress_bar()
     def __call__(self, dataloader, model, optimizer):
@@ -121,6 +107,7 @@ class Trainer:
             getattr(model, module).train()
 
         for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
+            
             # Update
             if torch.isnan(loss):
                 print(f"\033[31mPhase {self.name}: NaN value in loss, skipping update.\033[0m")
@@ -137,7 +124,7 @@ class Trainer:
 
 
 class Validator:
-    def __init__(self, name='VALID', device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+    def __init__(self, device, name='VALID'):
         self.name = name
         self.device = device
         self.loss_tracker = LossTracker(name, self.device)
@@ -148,35 +135,31 @@ class Validator:
 
         self.early_stopper = EarlyStopper()
 
-    def epoch_bahavior(self, loss, optimizer, early_stop, lr_decay):
+    def epoch_behavior(self, loss, optimizer, early_stop, lr_decay):
         self.loss_tracker.current_epoch += 1
         epoch_loss = self.loss_tracker.get_epoch_mean()
+
         loss = epoch_loss['LOSS']
         # Log best loss
         if 0 < loss < self.best_val_loss:
-            self.best_val_loss = val_loss
+            self.best_val_loss = loss
             self.best_val_epoch = loss_tracker.current_epoch
 
         if early_stop:
-            lr, lr_change = self.early_stopper(loss, lr_decay, optimizer)
-            if lr_change:
-                self.loss_tracker.lr_change_log[self.loss_tracker.current_epoch] = lr
-            
+            self.early_stopper(loss, lr_decay, optimizer)
 
     @with_progress_bar()
-    def __call__(self, dataloader, model, optimizer, early_stop=False):
+    def __call__(self, dataloader, model, optimizer, early_stop, lr_decay):
         for module in model.get_modules().keys():
             getattr(model, module).eval()
 
-        self.loss_tracker.reset_preds()
-
-        for idx in self.step(dataloader, model, self.device, self.loss_tracker):
-            yield idx, loss
+        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
+            yield idx, loss, self.early_stopper.stop_flag
         self.epoch_behavior(loss, optimizer, early_stop, lr_decay)
 
 
 class Tester:
-    def __init__(self, name='TEST', device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+    def __init__(self, device, name='TEST'):
         self.name = name
         self.device = device
         self.loss_tracker = LossTracker(name, self.device)
@@ -190,9 +173,8 @@ class Tester:
     def __call__(self, dataloader, model):
         for module in model.get_modules().keys():
             getattr(model, module).eval()
-        self.loss_tracker.reset_loss()
-        self.loss_tracker.reset_preds()
-        for idx in self.step(dataloader, model, self.device, self.loss_tracker):
+
+        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
             yield idx, loss
         self.epoch_behavior()
 
@@ -207,36 +189,28 @@ class EarlyStopper:
         self.stop_flag = False
 
         self.verbose = verbose
-        self.current_epoch = 0
         self.best_valid_loss = torch.inf
 
         self.lr_decayer = LrDecayer()
 
     def __call__(self, val_loss, lr_decay, optimizer):
-        self.current_epoch += 1
-        lr_change = False
-        
         # Early stopping flag
         if val_loss >= self.best_valid_loss:
             self.early_stop_counter += 1
             if self.verbose:
                 print(f"\033[32mEarly Stopping reporting: {self.early_stop_counter} out of {self.tolerance}\033[0m")
             
-            if self.early_stop_counter >= self.early_stop_max:
+            if self.early_stop_counter > self.tolerance:
+                self.early_stop_counter = 0
                 if lr_decay:
-                    lr_change = True
-                    lr = self.lr_decayer(optimizer)
+                    self.lr_decayer(optimizer)
                     if self.lr_decayer.stop_flag:
                         self.stop_flag = True
-                    else:
-                        self.early_stop_counter = 0
                 else:
                     self.stop_flag = True
         else:
             self.best_valid_loss = val_loss
             self.early_stop_counter = 0
-
-        return lr, lr_change
 
 class LrDecayer:
     def __init__(self, tolerance=5, verbose=True, *args, **kwargs):
@@ -254,8 +228,6 @@ class LrDecayer:
 
         if self.verbose:
             print(f"\033[32mLr decay reporting: {self.lr_decay_counter} out of {self.tolerance}. "
-                f"Decay rate = {self.decay_rate} ** {self.lr_decay_counter}\033[0m")
-        if self.lr_decay_counter >= self.tolerance:
+                f"Decay rate = {self.decay_rate ** self.lr_decay_counter}\033[0m")
+        if self.lr_decay_counter > self.tolerance:
             self.stop_flag = True
-
-        return param_group['lr']

@@ -28,11 +28,13 @@ class PlotSettings:
     def gen_axes(self, fig, ax_num):
         if ax_num > 3:
             axes = fig.subplots(2, np.ceil(ax_num / 2).astype(int))
+            axes = axes.flatten()
         elif ax_num > 1 and ax_num <= 3:
             axes = fig.subplots(1, ax_num)
+            axes = axes.flatten()
         else:
-            axes = flg.get_axes()
-        axes = axes.flatten()
+            axes = fig.get_axes()
+
         return fig, axes
 
 
@@ -71,7 +73,7 @@ class LossBuffer:
             # v 是 GPU tensor，不 detach 不拉回 CPU
             self.buffer[k].append(v.detach())
 
-    def epoch_mean(self):
+    def epoch_set(self):
         # 只在这里才转成 CPU numpy，减少 GPU->CPU copy
         out = {}
         for k, v_list in self.buffer.items():
@@ -80,11 +82,11 @@ class LossBuffer:
             # Keep track of epoch loss
             if k not in self.epoch_log:
                 self.epoch_log[k] = []
-            self.epoch_log[k].append(losses.mean())
+            self.epoch_log[k].append(losses.mean().item())
 
             out[k] = losses.mean().item()  # CPU 上标量
         
-        self.buffer = {}
+        self.reset()
         return out
 
     def reset(self):
@@ -95,7 +97,7 @@ class LossBuffer:
 class PredBuffer:
     def __init__(self, device='cuda'):
         self.device = device
-        self.buffer = {}  # {"mse": [tensor], "l1": [tensor], ...}
+        self.buffer = {}
         self.epoch_log = {}
 
     def add(self, loss_dict):
@@ -106,17 +108,18 @@ class PredBuffer:
             self.buffer[k].append(v.detach())
 
     def epoch_set(self):
+        self.epoch_log = {}
         # 只在这里才转成 CPU numpy，减少 GPU->CPU copy
-        out = {}
         for k, v_list in self.buffer.items():
-            losses = torch.stack(v_list)  # GPU 上堆叠
-            out[k] = losses.item()  # CPU 上标量
+            preds = torch.cat(v_list)  # GPU 上堆叠
+            self.epoch_log[k] = preds.squeeze()
 
-        self.epoch_log = out
-        return out
+        self.buffer = {}
+        return self.epoch_log
 
     def reset(self):
         self.buffer = {}
+        self.epoch_log = {}
 
 
 class IndexGenerator:
@@ -125,7 +128,7 @@ class IndexGenerator:
         self.select_tag = None
         self.fixed_inds = fixed_inds
 
-    def generate(self, tags: list=None, inds: list=None, select_ind: list=None, ind_range=8, select_num=8):
+    def __call__(self, inds: list=None, tags: list=None, select_ind: list=None, ind_range=8, select_num=8):
         if select_ind:
             self.select_ind = np.array(select_ind)
         else:
@@ -160,20 +163,7 @@ class LossPlotter:
         c = map_vir(norm(arr))
         return c
 
-    def plot_train_valid_loss(self, typed_losses: dict, title=None, lr_change_log: dict=None):
-        fig = None
-        for loss_type, loss in typed_losses.items():
-            ofig = self.plot_track(loss, loss_type, fig, title, lr_change_log)
-        plt.show()
-        return fig
-
-    def plot_track(self, losses:dict, loss_type: str='train', fig=None, title=None, lr_change_log: dict=None):
-
-        line_color = {
-            'train': 'blue',
-            'valid': 'orange',
-            'valid_target': 'green'
-        }
+    def plot_track(self, losses:dict, line_color: str='blue', line_label='', fig=None, title=None, lr_change_log: dict=None):
 
         if not fig:
             fig, axes = self.plot_settings(title, len(losses))
@@ -193,10 +183,9 @@ class LossPlotter:
 
         else:
             axes = fig.get_axes()
-            axes = axes.flatten()
 
         for ax, loss in zip(axes, list(losses.keys())):
-            ax.plot(losses[loss], line_color[loss_type], label=loss_type)
+            ax.plot(losses[loss], line_color, label=line_label)
             ax.set_title(loss, fontweight="bold")
             ax.legend()
 
@@ -228,20 +217,27 @@ class PredPlotter:
         self.plot_settings = PlotSettings()
 
     def plot_images(self, preds, inds, tags=None, title=None):
-
+        rows = len(preds)
+        if 'IND' in preds:
+            rows -= 1
+        if 'TAG' in preds:
+            rows -= 1
         fig, axes = self.plot_settings(title)
-        subfigs = fig.subfigures(nrows=len(preds), ncols=1)
+        subfigs = fig.subfigures(nrows=rows, ncols=1)
 
         for subfig, pred in zip(subfigs, preds.keys()):
             subfig.suptitle(pred)
-            axes = subfig.subplots(nrows=1, ncols=len(tags))
-            for ax, ind, tag in zip(axes, inds, tags):
-                img = ax.imshow(preds[pred][ind], vmin=0, vmax=1)
+            axes = subfig.subplots(nrows=1, ncols=len(inds))
+            for i, (ax, ind) in enumerate(zip(axes, inds)):
+                img = preds[pred][ind]
+                img = ax.imshow(img, vmin=0, vmax=1)
                 ax.axis('off')
                 if tags is None:
-                    ax.set_title(f"{ind}")
+                    subtitle = str(ind)
                 else:
-                    ax.set_title(f"{'-'.join(map(str, map(int, tag)))}")
+                    f"{'-'.join(map(str, map(int, tags[i])))}"
+                ax.set_title(subtitle)
+
             subfig.colorbar(img, ax=axes, shrink=0.8)
 
         plt.show()
@@ -262,12 +258,13 @@ class LossTracker:
         self.pred_plotter = PredPlotter()
 
         self.current_epoch = 0
+        self.current_lr = 0
         self.lr_change_log: dict = {}
 
         self.index_generator = IndexGenerator()
 
     def to_cpu(self, loss: dict):
-        out = {key: value.cpu().numpy() for key, value in loss.items()}
+        out = {key: torch.tensor(value, device='cpu').numpy() for key, value in loss.items()}
         return out
 
     def log_loss(self, losses:dict):
@@ -276,29 +273,31 @@ class LossTracker:
     def log_preds(self, preds:dict):
         self.pred_buffer.add(preds)
 
-    def log_lr_change(self, lr, ep):
-        self.lr_change_log[lr] = ep
+    def log_lr_change(self, optimizer):
+        for param_group in optimizer.param_groups:
+            lr = param_group['lr']
+            break
 
-    def get_epoch_mean(self):
+        if lr != self.current_lr:
+            self.lr_change_log[lr] = self.current_epoch
+            self.current_lr = lr
+        return lr
+
+    def get_epoch_mean(self, mode=''):
         if mode == 'train':
             self.current_epoch += 1
-        ret = self.loss_buffer.epoch_mean()
+        ret = self.loss_buffer.epoch_set()
+        preds = self.pred_buffer.epoch_set()
         return ret
 
-    def reset_preds(self):
-        # Only keep the latest epoch preds
-        self.pred_buffer.reset()
-
-    def reset_loss(self):
-        self.loss_tracker.reset()
-
-    def plot_loss_track(self):
+    def plot_loss_track(self, line_color, line_label, fig=None, show=False):
         # prepare for iterative use
         cpu_losses = self.to_cpu(self.loss_buffer.epoch_log)
-
-        title = f"{self.name}_TRAIN_LOSS@ep{self.current_epoch}"
+        title = f"{self.name}_LOSS@ep{self.current_epoch}"
         filename = f"{title}.jpg"
-        out_fig = self.loss_plotter.plot_train_valid_loss(typed_losses, title, self.lr_change_log)
+        out_fig = self.loss_plotter.plot_track(cpu_losses, line_color, line_label, fig, title, self.lr_change_log)
+        if show:
+            plt.show()
         return filename, out_fig
 
     def plot_cdf(self):
@@ -309,22 +308,23 @@ class LossTracker:
         out_fig = self.loss_plotter.plot_cdf(test_losses, title)
         return filename, out_fig
 
-    def plot_preds(self, pred_terms='all', mode='train'):
+    def plot_preds(self, pred_terms='all', show=True):
+        preds = self.pred_buffer.epoch_log
         if pred_terms == 'all':
-            pred_terms = list(self.pred_buffer.keys())
-        plot_preds = {key: value.epoch_log for key, value in self.pred_buffer.items() if key in pred_terms}
-        plot_preds = self.to_cpu(plot_preds)
+            pred_terms = list(preds.keys())
+        pred_terms.extend(['IND', 'TAG'])
+        preds = {key: value for key, value in preds.items() if key in pred_terms}
+        preds = self.to_cpu(preds)
 
-        title = f"{self.name}_PREDS_{mode.upper()}@{self.current_epoch}"
+        title = f"{self.name}_PREDS@{self.current_epoch}"
         filename = f"{title}.jpg"
 
-        inds, tags = self.index_generator(plot_preds['TAG'], plot_preds['IND'])
-        out_fig = self.pred_plotter.plot_images(plot_preds, inds, tags, title)
-        return filename, out_fig
+        inds, tags = self.index_generator(preds['IND'], preds.get('TAG', None))
+        out_fig = self.pred_plotter.plot_images(preds, inds, tags, title)
 
-    def lr_decay(self, rate=0.5):
-        # Really needed?
-        return
+        if show:
+            plt.show()
+        return filename, out_fig
 
     def save(self, target, mode, save_path):
         targets = {

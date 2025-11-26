@@ -9,13 +9,13 @@ def sg_filter_gpu(csi, window_size=21, poly_order=3, dim=-3):
     GPU Savitzky-Golay filter for multi-dimensional PyTorch tensor.
     
     Args:
-        csi: torch.Tensor, shape (batch * packet * sub * rx), must be on GPU
+        csi: torch.tensor, shape (batch * packet * sub * rx), must be on GPU
         window_size: int, odd, SG window length
         poly_order: int, polynomial order
         dim: int, dimension along which to filter (packet dim)
     
     Returns:
-        filtered torch.Tensor, same shape as input, on GPU
+        filtered torch.tensor, same shape as input, on GPU
     """
     assert window_size % 2 == 1, "window_size must be odd"
     assert poly_order < window_size, "poly_order must be smaller than window_size"
@@ -61,12 +61,12 @@ def phase_difference_gpu(csi_real, csi_imag):
         csi_complex = csi_real + 1.j * csi_imag
 
         # Reshape into batch * rx * (sub * packet)
-        u, *_ = torch.linalg.svd(csi.permute(0, 3, 2, 1).reshape(csi.shape[0], 3, -1), full_matrices=False)
+        u, *_ = torch.linalg.svd(csi_complex.permute(0, 3, 2, 1).reshape(csi_complex.shape[0], 3, -1), full_matrices=False)
         # AoA = batch * 4 (real & imag of 2)
         aoa = cal_pd(u)
         
         # Reshape into batch * sub * (rx * packet)
-        u, *_ = torch.linalg.svd(csi.permute(0, 2, 3, 1).reshape(csi.shape[0], 30, -1), full_matrices=False)
+        u, *_ = torch.linalg.svd(csi_complex.permute(0, 2, 3, 1).reshape(csi_complex.shape[0], 30, -1), full_matrices=False)
         # ToF = batch * 58 (real & imag of 29)
         tof = cal_pd(u)
         
@@ -79,40 +79,24 @@ def phase_difference_gpu(csi_real, csi_imag):
     return pd
 
 
-
-
-class MyDatasetLite(Dataset):
+class DatasetLite(Dataset):
     """
-    DATASET wrapper
-    Load CSI, shape, ind
+    Basic dataset for general usage.
     """
-
-    def __init__(self,
-                 data,
-                 csi_len=300,
-                 img_len=1,
-                 img_size=(128, 128),
-                 *args, **kwargs):
-
+    def __init__(self, data, len_base='ind', trans_image=['img'], img_size=(128, 128)):
         self.data = data
-        self.alignment = 'tail'
-        self.csi_len = csi_len
-        self.img_len = img_len
+        self.len_base = len_base
+        self.trans_image = trans_image
         self.img_size = img_size
 
     def __getitem__(self, index):
-        """
-        On-the-fly: select windowed CSI (and pd)
-        """
         ret: dict = {}
+        ret['ind'] = self.data.get('ind', index)
+        for key, value in self.data.items():
+            ret[key] = value[index]
 
-        ret['ind'] = index
-        img = self.data['shape'][index]
-        ret['shape'] = self.transform(torch.from_numpy(img))
-
-        csi_ind = self.data['ind'][index]
-        csi = self.data['csi'][csi_ind - self.csi_len: csi_ind]
-        ret['csi'], ret['pd'] = self.filter_csi(csi)
+            if key in self.trans_image:
+                ret[key] = self.transform([value][index])
 
         return ret
 
@@ -121,9 +105,53 @@ class MyDatasetLite(Dataset):
             tensor = tensor.unsqueeze(0).unsqueeze(0)
         elif tensor.dim() == 3:  
             tensor = tensor.unsqueeze(0)
-        return F.interpolate(tensor, size=self.img_size, mode='bilinear', align_corners=False)
+        return F.interpolate(tensor, size=self.img_size, mode='bilinear', align_corners=False).squeeze(0)
+
+    def __len__(self):
+        return len(self.data.get(self.len_base, []))
+
+
+class WiDepthDataset(DatasetLite):
+    """
+    WiDepth Dataset.
+    Applies SavGol filter, calculates PD.
+    """
+
+    def __init__(self,
+                 data,
+                 len_base='csi_ind',
+                 csi_len=300,
+                 img_len=1,
+                 img_size=(128, 128),
+                 *args, **kwargs):
+        
+        super(WiDepthDataset, self).__init__(data=data, 
+                                            len_base=len_base, 
+                                            img_size=img_size, 
+                                            *args, **kwargs)
+
+        self.csi_len = csi_len
+        self.img_len = img_len
+
+    def __getitem__(self, index):
+        """
+        On-the-fly: select windowed CSI (and pd)
+        """
+        ret: dict = {}
+
+        # ind = image index
+        ret['ind'] = index
+        ret['shape'] = self.transform(self.data['shape'][index])
+
+        csi_ind = self.data['csi_ind'][index]
+        csi = self.data['csi'][csi_ind - self.csi_len: csi_ind]
+
+        ret['csi'], ret['pd'] = self.filter_csi(csi)
+
+        return ret
 
     def filter_csi(self, csi):
+        # Savgol filter on CPU 
         csi_real = sg_filter_gpu(torch.real(csi))
         csi_imag = sg_filter_gpu(torch.imag(csi))
 
@@ -133,21 +161,19 @@ class MyDatasetLite(Dataset):
         # batch *  (rx * 2) * sub * packet
         csi = csi.permute(0, 3, 2, 1)
 
-        # Calculate pd
+        # Calculate pd on CPU
         pd = phase_difference_gpu(csi_real, csi_imag)
 
         return csi, pd
 
-    def __len__(self):
-        return len(self.data.get('ind', []))
 
-
-
-class MyDataLoaderLite:
-    def __init__(self):
+class DataLoaderLite:
+    def __init__(self, dstype='widepth'):
         self.data: dict = {}
+        self.dstype = dstype
 
     def load(self, path):
+        # Load all data as tensor on CPU
         paths = os.walk(path)
         print(f'Loading {path}...\n')
         for path, _, file_lst in paths:
@@ -155,12 +181,14 @@ class MyDataLoaderLite:
                 file_name_, ext = os.path.splitext(file_name)
 
                 if ext == '.npy':
-                    self.data[file_name_] = np.load(os.path.join(path, file_name))
-
+                    self.data[file_name_] = torch.tensor(np.load(os.path.join(path, file_name)), device='cpu')
                     print(f'Loaded {file_name}')
 
-        if 'matched_inds' in self.data.keys():
-            self.data['ind'] = self.data['matched_inds']
+                if 'csi' in file_name_:
+                    self.data[file_name_] = self.data[file_name_].to(torch.complex64)
+
+                if 'ind' in file_name_:
+                    self.data[file_name_] = self.data[file_name_].to(torch.int32)
 
         print(f"\nLoad complete!")
 
@@ -169,7 +197,11 @@ class MyDataLoaderLite:
         Simple case: only generates train/valid loader or test loader at once.
         For test loader, specify split_ratio=1.
         """
-        dataset = MyDatasetLite(self.data)
+        if self.dstype == 'widepth':
+            dataset = WiDepthDataset(self.data)
+        else:
+            dataset = DatasetLite(self.data)
+
         train_size, valid_size, test_size = 0, 0, 0
         train_loader, valid_loader, test_loader = None, None, None
 

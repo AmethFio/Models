@@ -11,6 +11,15 @@ def init_weights(m):
             m.bias.data.fill_(0.0)
     return m
 
+def reparameterize(mu, logvar):
+    """
+    Reparameterization trick in VAE.
+    :param mu: mu vector
+    :param logvar: logvar vector
+    :return: reparameterized vector
+    """
+    eps = torch.randn_like(mu)
+    return mu + eps * torch.exp(logvar / 2)
 
 class GEGLU_proj(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -126,7 +135,7 @@ class ImageDecoder(nn.Module):
         # 1 * 128 * 128
         # Re
 
-        self.fclayers = nn.Sequential(nn.Linear(self.latent_dim, 512 * 16 * 16))
+        self.fclayers = nn.Linear(self.latent_dim, 512 * 16 * 16)
 
         self.cnn = init_weights(self.cnn)
         self.fclayers = init_weights(self.fclayers)
@@ -213,6 +222,7 @@ class CSIEncoder3V(nn.Module):
         logvar = self.fc_logvar(out)
         z = reparameterize(mu, logvar)
 
+        return z, mu, logvar, out
 
 class Student(nn.Module):
 
@@ -252,7 +262,8 @@ class Student(nn.Module):
         return mu_loss, logvar_loss
 
 
-    def forward(self, csi, pd, rimg):
+    def forward(self, data):
+        csi, pd, rimg = data['csi'], data['pd'], data['rimg']
         s_fea, s_z, s_mu, s_logvar = self.csien(csi=csi, pd=pd)
         s_rimage = self.imgde(s_z)
 
@@ -269,6 +280,7 @@ class Student(nn.Module):
         'S_PRED': s_rimage,
         'T_LAT'     : t_z,
         'T_PRED': t_rimage,
+        'GT': rimg
         }
 
         loss = {
@@ -295,7 +307,7 @@ class Teacher(nn.Module):
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
 
         self.beta = 0.5
-        self.img_weight = 1.e-3
+        self.img_weight = 1.e-5
 
     def get_modules(self):
         return {'imgen': self.imgen,
@@ -305,7 +317,8 @@ class Teacher(nn.Module):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         return kl_loss
 
-    def forward(self, rimg):
+    def forward(self, data):
+        rimg = data['shape']
         z, mu, logvar, feature = self.imgen(rimg)
         r_recon = self.imgde(z)
 
@@ -317,6 +330,8 @@ class Teacher(nn.Module):
         ret = {
         'LAT'      : z,
         'IMG': r_recon,
+        'GT': rimg,
+        'IND': data['ind']
                 }
 
         loss = {
@@ -325,4 +340,4 @@ class Teacher(nn.Module):
             'IMG': img_loss
         }
 
-        return ret
+        return ret, loss
