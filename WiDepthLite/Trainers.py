@@ -9,31 +9,57 @@ except ImportError:
 from LossLayer import LossTracker
 from functools import wraps
 from tqdm.notebook import tqdm
+from IPython.display import clear_output
 
-def with_progress_bar(bar_format=None):
-    if bar_format is None:
-        bar_format = '{desc}{percentage:3.0f}%|{bar}|[{elapsed}<{remaining}{postfix}]'
+class AutoCleanTqdm(tqdm):
+    # Not proper
+    def close(self):
+        super().close()
+        clear_output(wait=True)
 
-    def decorator(func):
-        @wraps(func)
-        def wrapped(self, dataloader, *args, **kwargs):
+class ProgressBar:
+    def __init__(self, desc="", bar_format=None):
+        self.desc_name = desc
+        if bar_format is None:
+            bar_format = '{desc}: {percentage:3.0f}%|{bar}|[{elapsed}<{remaining}{postfix}]'
+        self.bar_format = bar_format
+
+    def __call__(self, func):
+        """
+        func must yield (idx, loss)
+        """
+
+        def wrapped(instance, dataloader, *args, **kwargs):
             total = len(dataloader)
-            print('')
-            with tqdm(total=total, dynamic_ncols=True, bar_format=bar_format) as progress_bar:
-                for idx, loss, *_ in func(self, dataloader, *args, **kwargs):
-                    progress_bar.set_postfix({
-                        'batch': f"{idx}/{total}",
-                        'loss': f"{loss:.4f}"
-                    })
-                    progress_bar.update(1)   # ← 正确推进进度条
-                    yield idx, loss, *_
+            interval = max(total // 10, 1)
+            desc = f"{self.desc_name} ep{instance.epoch}"
+
+            with tqdm(
+                total=total,
+                dynamic_ncols=True,
+                bar_format=self.bar_format,
+                desc=desc,
+                leave=False
+            ) as progress_bar:
+
+                for idx, loss in func(dataloader, *args, **kwargs):
+                    # 10-step update + always finish at total
+                    if idx % interval == 0 or idx == total:
+                        progress_bar.set_postfix({
+                            "batch": f"{idx}/{total}",
+                            "loss": f"{loss:.4f}"
+                        })
+                        progress_bar.n = idx
+                        progress_bar.refresh()
+
+                    yield idx, loss
+
         return wrapped
-    return decorator
 
 
 class ModelStep:
     def __init__(self):
-        pass
+        self.epoch = 0
 
     def preprocess_gpu(self, data):
         return data
@@ -50,6 +76,7 @@ class ModelStep:
         return data
 
     def __call__(self, dataloader, model, device, loss_tracker):
+        self.epoch += 1
         for idx, data in enumerate(dataloader, 1):
             # Prepare data
             _data_ = self.data_preprocess(data, device)
@@ -65,34 +92,44 @@ class ModelStep:
 
 
 class Trainer:
+    name = 'TRAIN'
     def __init__(self, device, name='TRAIN',
-                train_module='all', eval_module=[]):
+                train_module='all'):
         self.name = name
         self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.step = ModelStep()
         self.scaler = GradScaler()
 
         self.train_module = train_module
-        self.eval_module = eval_module
-        self.already_set_optimizer = False
+
+        self.progress_bar = ProgressBar(self.name)
+        self.modelstep = ModelStep()
+        # Decorate with progress bar
+        self.progress_step = self.progress_bar(self.modelstep)
+
+    def set_trainable_params(self, model):
+        params = []
+        for name, module in model.named_children():
+            requires_grad = name in self.train_module
+            for p in module.parameters():
+                p.requires_grad = requires_grad
+
+            if requires_grad:
+                params += list(module.parameters())
+        return params
+
+    def get_trainable_params(self, model):
+        params = []
+        for name, module in self.named_children():
+            if name in self.train_module:
+                params += list(module.parameters())
+        return params
 
     def set_optimizer(self, model, optimizer, lr):
         if self.train_module == 'all':
-            self.train_module = list(model.get_modules().keys())
+            self.train_module = list(model.get_modules().values())
 
-        if self.eval_module == 'all':
-            self.eval_module = list(model.get_modules().keys())
-
-        trainable_params = []
-        for module in self.train_module:
-            for name, param in getattr(model, module).named_parameters():
-                param.requires_grad = True
-                trainable_params.append({'params': param, 'lr': lr})
-
-        for module in self.eval_module:
-            for name, param in getattr(model, module).named_parameters():
-                param.requires_grad = False
+        trainable_params = self.set_trainable_params(model)
 
         opt = optimizer(trainable_params, lr, amsgrad=False)
         return opt
@@ -100,13 +137,11 @@ class Trainer:
     def epoch_behavior(self, optimizer):
         lr = self.loss_tracker.log_lr_change(optimizer)
         epoch_loss = self.loss_tracker.get_epoch_mean('train')
-
-    @with_progress_bar()
+        
     def __call__(self, dataloader, model, optimizer):
-        for module in model.get_modules().keys():
-            getattr(model, module).train()
+        model.train()
 
-        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
+        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
             
             # Update
             if torch.isnan(loss):
@@ -128,12 +163,18 @@ class Validator:
         self.name = name
         self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.step = ModelStep()
 
         self.best_val_loss = torch.inf
         self.best_val_epoch = 0
 
         self.early_stopper = EarlyStopper()
+        self.lr_decayer = LrDecayer()
+        self.stop_flag = False
+
+        self.progress_bar = ProgressBar(self.name)
+        self.modelstep = ModelStep()
+        # Decorate with progress bar
+        self.progress_step = self.progress_bar(self.modelstep)
 
     def epoch_behavior(self, loss, optimizer, early_stop, lr_decay):
         self.loss_tracker.current_epoch += 1
@@ -143,18 +184,20 @@ class Validator:
         # Log best loss
         if 0 < loss < self.best_val_loss:
             self.best_val_loss = loss
-            self.best_val_epoch = loss_tracker.current_epoch
+            self.best_val_epoch = self.loss_tracker.current_epoch
 
         if early_stop:
-            self.early_stopper(loss, lr_decay, optimizer)
+            self.early_stopper(self.loss_tracker.current_epoch, loss, optimizer, 
+            lr_decay, self.lr_decayer)
 
-    @with_progress_bar()
+        if self.early_stopper.stop_flag:
+            self.stop_flag = True
+
     def __call__(self, dataloader, model, optimizer, early_stop, lr_decay):
-        for module in model.get_modules().keys():
-            getattr(model, module).eval()
+        model.eval()
 
-        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
-            yield idx, loss, self.early_stopper.stop_flag
+        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
+            yield idx, loss
         self.epoch_behavior(loss, optimizer, early_stop, lr_decay)
 
 
@@ -163,24 +206,26 @@ class Tester:
         self.name = name
         self.device = device
         self.loss_tracker = LossTracker(name, self.device)
-        self.step = ModelStep()
+        
+        self.progress_bar = ProgressBar(self.name)
+        self.modelstep = ModelStep()
+        # Decorate with progress bar
+        self.progress_step = self.progress_bar(self.modelstep)
 
     def epoch_behavior(self):
         for key, value in self.loss_tracker.loss_buffer.buffer.items():
             self.loss_tracker.loss_buffer.buffer[key] = value.squeeze()
 
-    @with_progress_bar()
     def __call__(self, dataloader, model):
-        for module in model.get_modules().keys():
-            getattr(model, module).eval()
+        model.eval()
 
-        for idx, loss in self.step(dataloader, model, self.device, self.loss_tracker):
+        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
             yield idx, loss
         self.epoch_behavior()
 
 
 class EarlyStopper:
-    def __init__(self, min_epoch=100, tolerance=10, verbose=True, *args, **kwargs):
+    def __init__(self, min_epoch=30, tolerance=10, verbose=True, *args, **kwargs):
 
         self.min_epoch = min_epoch
         self.tolerance = tolerance
@@ -191,26 +236,36 @@ class EarlyStopper:
         self.verbose = verbose
         self.best_valid_loss = torch.inf
 
-        self.lr_decayer = LrDecayer()
+    def __call__(self, epoch, val_loss, optimizer, lr_decay, lr_decayer):
+        if epoch < self.min_epoch:
+            return
 
-    def __call__(self, val_loss, lr_decay, optimizer):
-        # Early stopping flag
+        accumulate = False
+        process = False
+
         if val_loss >= self.best_valid_loss:
+            accumulate = True
+        else:
+            self.best_valid_loss = val_loss
+
+        if accumulate:
             self.early_stop_counter += 1
             if self.verbose:
                 print(f"\033[32mEarly Stopping reporting: {self.early_stop_counter} out of {self.tolerance}\033[0m")
             
-            if self.early_stop_counter > self.tolerance:
-                self.early_stop_counter = 0
-                if lr_decay:
-                    self.lr_decayer(optimizer)
-                    if self.lr_decayer.stop_flag:
-                        self.stop_flag = True
-                else:
-                    self.stop_flag = True
-        else:
-            self.best_valid_loss = val_loss
+        if self.early_stop_counter > self.tolerance:
+            if lr_decay:
+                process = True
+            else:
+                self.stop_flag = True
+
+        if process:
+            lr_decayer(optimizer)
             self.early_stop_counter = 0
+
+        if lr_decayer.stop_flag:
+            self.stop_flag = True
+
 
 class LrDecayer:
     def __init__(self, tolerance=5, verbose=True, *args, **kwargs):

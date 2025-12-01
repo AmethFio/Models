@@ -55,27 +55,23 @@ def phase_difference_gpu(csi_real, csi_imag):
     def cal_pd(u):
         pd = u[:, 1:, 0] * u[:, :-1, 0].conj()
         return torch.cat((torch.real(pd), torch.imag(pd)), axis=-1)
-    
-    try:
-        # CSI shape = batch * packet * sub * rx
-        csi_complex = csi_real + 1.j * csi_imag
 
-        # Reshape into batch * rx * (sub * packet)
-        u, *_ = torch.linalg.svd(csi_complex.permute(0, 3, 2, 1).reshape(csi_complex.shape[0], 3, -1), full_matrices=False)
-        # AoA = batch * 4 (real & imag of 2)
-        aoa = cal_pd(u)
-        
-        # Reshape into batch * sub * (rx * packet)
-        u, *_ = torch.linalg.svd(csi_complex.permute(0, 2, 3, 1).reshape(csi_complex.shape[0], 30, -1), full_matrices=False)
-        # ToF = batch * 58 (real & imag of 29)
-        tof = cal_pd(u)
-        
-        # Concatenate as a flattened vector
-        pd = torch.cat((aoa, tof), axis=-1)
+    # CSI shape = batch * packet * sub * rx
+    csi_complex = csi_real + 1.j * csi_imag
 
-    except Exception as e:
-        print(f'FilterPD aborted due to {e}')
+    # Reshape into batch * rx * (sub * packet)
+    u, *_ = torch.linalg.svd(csi_complex.permute(0, 3, 2, 1).reshape(csi_complex.shape[0], 3, -1), full_matrices=False)
+    # AoA = batch * 4 (real & imag of 2)
+    aoa = cal_pd(u)
     
+    # Reshape into batch * sub * (rx * packet)
+    u, *_ = torch.linalg.svd(csi_complex.permute(0, 2, 3, 1).reshape(csi_complex.shape[0], 30, -1), full_matrices=False)
+    # ToF = batch * 58 (real & imag of 29)
+    tof = cal_pd(u)
+    
+    # Concatenate as a flattened vector
+    pd = torch.cat((aoa, tof), axis=-1)
+
     return pd
 
 
@@ -105,6 +101,8 @@ class DatasetLite(Dataset):
             tensor = tensor.unsqueeze(0).unsqueeze(0)
         elif tensor.dim() == 3:  
             tensor = tensor.unsqueeze(0)
+        if tensor.dtype == torch.uint8:
+            tensor = tensor.to(torch.float32) / 255.
         return F.interpolate(tensor, size=self.img_size, mode='bilinear', align_corners=False).squeeze(0)
 
     def __len__(self):
@@ -145,26 +143,60 @@ class WiDepthDataset(DatasetLite):
 
         csi_ind = self.data['csi_ind'][index]
         csi = self.data['csi'][csi_ind - self.csi_len: csi_ind]
-
-        ret['csi'], ret['pd'] = self.filter_csi(csi)
+        # (pkt, sub, rx, tx) -> (pkt, sub, rx)
+        csi = csi[..., 0].squeeze()
+        ret['csi'] = csi
 
         return ret
 
-    def filter_csi(self, csi):
-        # Savgol filter on CPU 
+    @staticmethod
+    def collate_fn(batch):
+        """
+        Batch-based preprocessing. Apply as collate_fn in DataLoader.
+        """
+
+        keys = batch[0].keys()
+        batch_data: dict = {}
+
+        # Assemble batch data
+        for key in keys:
+            try:
+                batch_data[key] = torch.stack([b.get(key) for b in batch], dim=0)
+            except TypeError:
+                batch_data[key] = torch.tensor([b.get(key) for b in batch])
+            
+        csi = batch_data['csi']
+
+        # Savgol filter
         csi_real = sg_filter_gpu(torch.real(csi))
         csi_imag = sg_filter_gpu(torch.imag(csi))
 
+        # Calculate pd upon filtered CSI
+        pd = phase_difference_gpu(csi_real, csi_imag)
+
+        # Rearrange CSI
         # CSI sample (batch *  packet * sub * (rx * 2))
         csi = torch.cat((csi_real, csi_imag), axis=-1)
-
         # batch *  (rx * 2) * sub * packet
         csi = csi.permute(0, 3, 2, 1)
 
-        # Calculate pd on CPU
-        pd = phase_difference_gpu(csi_real, csi_imag)
+        batch_data['csi'], batch_data['pd'] = csi, pd
 
-        return csi, pd
+        return batch_data
+
+
+def AutoDataLoader(dataset, **kwargs):
+    # 如果是 Subset，则找到其原 dataset
+    if isinstance(dataset, torch.utils.data.Subset):
+        base = dataset.dataset
+    else:
+        base = dataset
+
+    # 自动绑定 collate_fn
+    if hasattr(base, "collate_fn"):
+        kwargs["collate_fn"] = base.collate_fn
+
+    return DataLoader(dataset, **kwargs)
 
 
 class DataLoaderLite:
@@ -184,7 +216,7 @@ class DataLoaderLite:
                     self.data[file_name_] = torch.tensor(np.load(os.path.join(path, file_name)), device='cpu')
                     print(f'Loaded {file_name}')
 
-                if 'csi' in file_name_:
+                if 'csi' in file_name_ and 'ind' not in file_name_:
                     self.data[file_name_] = self.data[file_name_].to(torch.complex64)
 
                 if 'ind' in file_name_:
@@ -220,7 +252,7 @@ class DataLoaderLite:
             f' Batch size = {batch_size}')
 
         if train_size > 0:
-            train_loader = DataLoader(train_set, 
+            train_loader = AutoDataLoader(train_set, 
                                     batch_size=batch_size, 
                                     num_workers=num_workers,
                                     drop_last=True, 
@@ -228,7 +260,7 @@ class DataLoaderLite:
                                     )
 
         if valid_size > 0:
-            valid_loader = DataLoader(valid_set, 
+            valid_loader = AutoDataLoader(valid_set, 
                                     batch_size=batch_size, 
                                     num_workers=num_workers,
                                     drop_last=True, 
@@ -236,7 +268,7 @@ class DataLoaderLite:
                                     )
 
         if test_size > 0:
-            test_loader = DataLoader(test_set, 
+            test_loader = AutoDataLoader(test_set, 
                                     batch_size=batch_size, 
                                     num_workers=num_workers,
                                     pin_memory=pin_memory,

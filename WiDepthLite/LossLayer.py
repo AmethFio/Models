@@ -77,14 +77,14 @@ class LossBuffer:
         # 只在这里才转成 CPU numpy，减少 GPU->CPU copy
         out = {}
         for k, v_list in self.buffer.items():
-            losses = torch.stack(v_list)  # GPU 上堆叠
+            loss = torch.stack(v_list)  # GPU 上堆叠
 
             # Keep track of epoch loss
             if k not in self.epoch_log:
                 self.epoch_log[k] = []
-            self.epoch_log[k].append(losses.mean().item())
+            self.epoch_log[k].append(loss.mean().item())
 
-            out[k] = losses.mean().item()  # CPU 上标量
+            out[k] = loss.mean().item()  # For show
         
         self.reset()
         return out
@@ -150,36 +150,36 @@ class LossPlotter:
     def __init__(self):
         self.plot_settings = PlotSettings()
 
-    @staticmethod
-    def colors(arrays):
-        """
-        Color solution for plotting loss
-        :param arrays: array of learning rates
-        :return: variation of colors
-        """
-        arr = -np.log(arrays)
-        norm = plt.Normalize(arr.min(), arr.max())
-        map_vir = cm.get_cmap(name='viridis')
-        c = map_vir(norm(arr))
-        return c
+    def plot_lr_change(self, axes, lr_change_log):
+
+        def colors(lrs):
+            lrs = -np.log(lrs)
+            norm = plt.Normalize(np.min(lrs), np.max(lrs))
+            map_vir = cm.get_cmap(name='viridis')
+            c = map_vir(norm(lrs))
+            return c
+
+        stage_color = colors(list(lr_change_log.keys()))
+
+        for ax in axes:
+            for c, (lr, ep) in zip(stage_color, lr_change_log.items()):
+                ax.axvline(ep,
+                            linestyle='--',
+                            color=c,
+                            label=f'lr={lr:.2e}')
+
+        return axes
 
     def plot_track(self, losses:dict, line_color: str='blue', line_label='', fig=None, title=None, lr_change_log: dict=None):
 
         if not fig:
             fig, axes = self.plot_settings(title, len(losses))
-
+            for ax in axes:
+                ax.set_xlabel('#Epoch')
+                ax.set_ylabel('Loss')
+                ax.grid()
             if lr_change_log:
-                stage_color = self.colors(list(lr_change_log.values()))
-                for ax in axes:
-                    for j, lr in enumerate(lr_change_log.keys()):
-                        ax.axvline(lr_change_log[lr],
-                            linestyle='--',
-                            color=stage_color[j],
-                            label=f'lr={lr}')
-
-                        ax.set_xlabel('#Epoch')
-                        ax.set_ylabel('Loss')
-                        ax.grid()
+                axes = self.plot_lr_change(axes, lr_change_log)
 
         else:
             axes = fig.get_axes()
@@ -217,13 +217,12 @@ class PredPlotter:
         self.plot_settings = PlotSettings()
 
     def plot_images(self, preds, inds, tags=None, title=None):
-        rows = len(preds)
-        if 'IND' in preds:
-            rows -= 1
-        if 'TAG' in preds:
-            rows -= 1
+        rows = len(preds) - 2
+
         fig, axes = self.plot_settings(title)
         subfigs = fig.subfigures(nrows=rows, ncols=1)
+        if rows == 1:
+            subfigs = [subfigs]
 
         for subfig, pred in zip(subfigs, preds.keys()):
             subfig.suptitle(pred)
@@ -264,7 +263,7 @@ class LossTracker:
         self.index_generator = IndexGenerator()
 
     def to_cpu(self, loss: dict):
-        out = {key: torch.tensor(value, device='cpu').numpy() for key, value in loss.items()}
+        out = {key: torch.tensor(value).cpu().numpy() if value is not None else None for key, value in loss.items()}
         return out
 
     def log_loss(self, losses:dict):
@@ -312,14 +311,15 @@ class LossTracker:
         preds = self.pred_buffer.epoch_log
         if pred_terms == 'all':
             pred_terms = list(preds.keys())
-        pred_terms.extend(['IND', 'TAG'])
         preds = {key: value for key, value in preds.items() if key in pred_terms}
+        preds['IND'] = self.pred_buffer.epoch_log.get('IND', None)
+        preds['TAG'] = self.pred_buffer.epoch_log.get('TAG', None)
         preds = self.to_cpu(preds)
 
         title = f"{self.name}_PREDS@{self.current_epoch}"
         filename = f"{title}.jpg"
 
-        inds, tags = self.index_generator(preds['IND'], preds.get('TAG', None))
+        inds, tags = self.index_generator(preds['IND'], preds['TAG'])
         out_fig = self.pred_plotter.plot_images(preds, inds, tags, title)
 
         if show:

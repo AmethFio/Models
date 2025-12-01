@@ -9,10 +9,9 @@ from LossLayer import LossTracker
 from Trainers import *
 import time
 from datetime import timedelta, datetime
+from functools import wraps
 
 def timer(func):
-    from functools import wraps
-
     @wraps(func)
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -23,16 +22,15 @@ def timer(func):
 
     return wrapper
 
-def file_finder(path, func, process_name=None, *args, **kwargs):
+def file_walker(path, process_name=None, *args, **kwargs):
     process_name = f"{process_name}: " if process_name else ''
     print(f"\033[32m{process_name}Loading {path}\033[0m")
-    res = []
+
     for p, _, file_lst in os.walk(path):
         for file_name in file_lst:
             file_name_, ext = os.path.splitext(file_name)
-            # print(f"Processing {file_name}...")
-            res.append(func(os.path.join(p, file_name), file_name_, ext, *args, **kwargs))
-    return res
+            filepath = os.path.join(p, file_name)
+            yield file_name_, ext, filepath
 
 class ModelNotFoundError(Exception):
     def __init__(self, message="\033[31mCheck path: did not load any model!\033[0m"):
@@ -65,6 +63,8 @@ class ModelTrainer:
         self.tester = Tester(self.device, f"{self.name}_{self.notion}_TEST")
 
         self.final_log: str = ""
+        self.model_paths = {module_name: None for module_name in self.model.get_modules().keys()}
+        self.pred_terms = 'all'
 
         self.set_optimizer()
 
@@ -96,13 +96,15 @@ class ModelTrainer:
             for idx, loss in self.trainer(self.dataloader['train'], self.model, self.optimizer):
                 continue
 
-            for idx, loss, stop_flag in self.validator(self.dataloader['valid'], self.model, self.optimizer, early_stop, lr_decay):
-                if early_stop and stop_flag:
-                    break
+            for idx, loss in self.validator(self.dataloader['valid'], self.model, self.optimizer, early_stop, lr_decay):
+                continue
+
+            if early_stop and self.validator.stop_flag:
+                break
 
             if epoch % 10 == 0:
                 self.plot_train_valid_loss()
-                filename, fig = self.validator.loss_tracker.plot_preds(pred_terms=['IMG', 'GT'])
+                filename, fig = self.validator.loss_tracker.plot_preds(self.pred_terms)
         
         if save_model:
             self.save(mode='best')
@@ -125,19 +127,19 @@ class ModelTrainer:
 
     def save(self, mode='checkpoint'):
         # mode = 'best' or 'chechpoint'
-        print("Saving models...")
-        for modelname, model in self.model.get_modules():
+        print("Saving model...")
+        for modelname, model in self.model.get_modules().items():
             print(f"Saving {modelname}...")
             torch.save({
                 'model_state_dict': model.state_dict(),
                 }, 
-                       f"{self.save_path}{self.name}_models_{modelname}_{mode}.pth")
+                       f"{self.save_path}{self.name}_model_{modelname}_{mode}.pth")
         
         print(f"Saving optimizer...")
         torch.save({
             'optimizer_state_dict': self.optimizer.state_dict()
             }, 
-                    f"{self.save_path}{self.name}_optimizer_{name}_{mode}.pth")
+                    f"{self.save_path}{self.name}_optimizer_{modelname}_{mode}.pth")
         
         print("All saved!")
 
@@ -145,31 +147,31 @@ class ModelTrainer:
         print(f"\033[32m=========={self.notion} {self.name} Loading==========\033[0m")
         hit = False
         # Collect all matching file paths for each model
-        model_files = {model_name: None for model_name in self.models.keys()}
         
-        def find_path(file_path, file_name_, ext):
-            if ext == '.pth' and name in file_name_ and mode in file_name_:
-                # Match file with model names
-                for model_name in self.models.keys():
-                    if model_name in file_name_:
-                        model_files[model_name] = file_path
+        for file_name, ext, file_path in file_walker(path):
 
-        file_finder(path, find_path)
+            is_ext = (ext == '.pth')
+            is_name = (name in file_name)
+            is_mode = (mode in file_name)
+            isn_opt = ('optimizer' not in file_name)
+
+            if is_ext and is_name and is_mode and isn_opt:
+                # Match file with model names
+                for module_name in self.model_paths.keys():
+                    if module_name in file_name:
+                        self.model_paths[module_name] = file_path
 
         # Load each model's checkpoint if available
-        for model_name, model in self.models.items():
-            file_path = model_files.get(model_name)
+        for module_name, file_path in self.model_paths.items():
             if file_path:
                 hit = True
                 checkpoint = torch.load(file_path, map_location='cpu', weights_only=False)
 
-                model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-                model.to(self.device)
+                self.model.get_modules()[module_name].load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+                self.model.get_modules()[module_name].to(self.device)
 
-                print(f"Loaded model {model_name} from {file_path}!")
+                print(f"Loaded model {module_name} from {file_path}!")
 
         # Warning
         if not hit:
             raise ModuleNotFoundError
-
-    

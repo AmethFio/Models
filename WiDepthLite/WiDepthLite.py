@@ -4,6 +4,8 @@ from torch.nn import functional as F
 from torchinfo import summary
 import torch.nn.init as init
 
+from TrainerLite import ModelTrainer
+
 def init_weights(m):
     if isinstance(m, nn.Linear):
         torch.nn.init.xavier_uniform_(m.weight)
@@ -120,7 +122,7 @@ class ImageDecoder(nn.Module):
                 cnn.extend([nn.ConvTranspose2d(in_ch, out_ch, ks, st, pd),
                             nn.LeakyReLU(inplace=True)])
         
-        self.cnn = nn.Sequential(*cnn, self.activate_func)
+        self.cnn = nn.Sequential(*cnn)
 
         # 512 * 16 * 16
         # 256 * 16 * 16
@@ -146,16 +148,19 @@ class ImageDecoder(nn.Module):
     def forward(self, x):
         out = self.fclayers(x)
         out = self.cnn(out.view(-1, 512, 16, 16))
+        # DO NOT use sigmoid with BCEWithLogitsLoss
+        # if not self.training:
+        #    out = torch.sigmoid(out)
         return out.view(-1, 1, 128, 128)
 
 
 
-class CSIEncoder3V(nn.Module):
+class CSIEncoderHPool(nn.Module):
     name = 'csien'
     
     def __init__(self,latent_dim=128, lstm_step_length=512 * 7, lstm_steps=75):
         
-        super(CSIEncoder3V, self).__init__()
+        super(CSIEncoderHPool, self).__init__()
         self.latent_dim = latent_dim
         self.lstm_step_length = lstm_step_length
 
@@ -172,13 +177,10 @@ class CSIEncoder3V(nn.Module):
 
         self.cnn = nn.Sequential(
             nn.Conv2d(6, 128, 5, 1, 1),
-            batchnorm_layer(128, self.batchnorm),
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(128, 256, 3, 2, 1),
-            batchnorm_layer(256, self.batchnorm),
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(256, 512, 3, 2, 1),
-            batchnorm_layer(512, self.batchnorm),
             nn.LeakyReLU(inplace=True)
         )
 
@@ -245,8 +247,9 @@ class Student(nn.Module):
         self.img_loss = nn.MSELoss()
         self.feature_loss = nn.MSELoss()
 
+        self.alpha = 0.8
         self.latent_weight = 0.1
-        self.rimg_weight = 1.e-4
+        self.rimg_weight = 1.e-5
         self.feature_weight = 10
 
     def get_modules(self):
@@ -263,15 +266,16 @@ class Student(nn.Module):
 
 
     def forward(self, data):
-        csi, pd, rimg = data['csi'], data['pd'], data['rimg']
-        s_fea, s_z, s_mu, s_logvar = self.csien(csi=csi, pd=pd)
+        csi, pd, rimg = data['csi'], data['pd'], data['shape']
+        s_z, s_mu, s_logvar, s_fea = self.csien(csi=csi, pd=pd)
         s_rimage = self.imgde(s_z)
 
         with torch.no_grad():
             t_z, t_mu, t_logvar, t_fea = self.imgen(rimg)
             t_rimage = self.imgde(t_z)
 
-        latent_loss = self.kd_loss(s_mu, s_logvar, t_mu, t_logvar) * self.latent_weight
+        mu_loss, logvar_loss = self.kd_loss(s_mu, s_logvar, t_mu, t_logvar)
+        mu_loss, logvar_loss = self.alpha * mu_loss * self.latent_weight, (1 - self.alpha) * logvar_loss * self.latent_weight
         feature_loss = self.feature_loss(s_fea, t_fea) * self.feature_weight
         image_loss = self.img_loss(s_rimage, rimg)
 
@@ -280,12 +284,14 @@ class Student(nn.Module):
         'S_PRED': s_rimage,
         'T_LAT'     : t_z,
         'T_PRED': t_rimage,
-        'GT': rimg
+        'GT': rimg,
+        'IND': data['ind']
         }
 
         loss = {
-            'LOSS': latent_loss + feature_loss + image_loss,
-            'LAT': latent_loss,
+            'LOSS': mu_loss + logvar_loss + feature_loss + image_loss,
+            'MU': mu_loss,
+            'LOGVAR': logvar_loss,
             'FEA': feature_loss,
             'IMG': image_loss
         }
@@ -307,7 +313,7 @@ class Teacher(nn.Module):
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
 
         self.beta = 0.5
-        self.img_weight = 1.e-5
+        self.img_weight = 1.
 
     def get_modules(self):
         return {'imgen': self.imgen,
@@ -341,3 +347,16 @@ class Teacher(nn.Module):
         }
 
         return ret, loss
+
+
+class StudentTrainer(ModelTrainer):
+    def __init__(self, *args, **kwargs):
+        super(StudentTrainer, self).__init__(*args, **kwargs)
+        self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN", 
+                        train_module=['csien'], eval_module=['imgen', 'imgde'])
+        self.pred_terms = ('GT', 'T_PRED', 'S_PRED')
+
+class TeacherTrainer(ModelTrainer):
+    def __init__(self, *args, **kwargs):
+        super(TeacherTrainer, self).__init__(*args, **kwargs)
+        self.pred_terms = ('GT', 'IMG')
