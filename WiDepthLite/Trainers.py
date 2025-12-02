@@ -107,31 +107,22 @@ class Trainer:
         # Decorate with progress bar
         self.progress_step = self.progress_bar(self.modelstep)
 
-    def set_trainable_params(self, model):
-        params = []
+    def set_optimizer(self, model, optimizer, lr):
+        if self.train_module == 'all':
+            self.train_module = list(model.named_children().values())
+
+        trainable_params = []
         for name, module in model.named_children():
             requires_grad = name in self.train_module
             for p in module.parameters():
                 p.requires_grad = requires_grad
 
             if requires_grad:
-                params += list(module.parameters())
-        return params
+                trainable_params += list(module.parameters())
 
-    def get_trainable_params(self, model):
-        params = []
-        for name, module in self.named_children():
-            if name in self.train_module:
-                params += list(module.parameters())
-        return params
-
-    def set_optimizer(self, model, optimizer, lr):
-        if self.train_module == 'all':
-            self.train_module = list(model.get_modules().values())
-
-        trainable_params = self.set_trainable_params(model)
-
-        opt = optimizer(trainable_params, lr, amsgrad=False)
+        opt = None
+        if len(trainable_params) > 0:
+            opt = optimizer(trainable_params, lr, amsgrad=False)
         return opt
 
     def epoch_behavior(self, optimizer):
@@ -213,8 +204,7 @@ class Tester:
         self.progress_step = self.progress_bar(self.modelstep)
 
     def epoch_behavior(self):
-        for key, value in self.loss_tracker.loss_buffer.buffer.items():
-            self.loss_tracker.loss_buffer.buffer[key] = value.squeeze()
+        epoch_loss = self.loss_tracker.get_epoch_mean()
 
     def __call__(self, dataloader, model):
         model.eval()

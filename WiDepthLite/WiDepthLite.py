@@ -4,6 +4,7 @@ from torch.nn import functional as F
 from torchinfo import summary
 import torch.nn.init as init
 
+from Trainers import *
 from TrainerLite import ModelTrainer
 
 def init_weights(m):
@@ -351,12 +352,12 @@ class Teacher(nn.Module):
 
 class StudentTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):
-        super(StudentTrainer, self).__init__(*args, **kwargs)
+        super(StudentTrainer, self).__init__(model=Student(), *args, **kwargs)
         self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN", 
-                        train_module=['csien'], eval_module=['imgen', 'imgde'])
-        self.pred_terms = ('GT', 'T_PRED', 'S_PRED')
+                        train_module=['csien'])
+        self.pred_terms = {'GT', 'T_PRED', 'S_PRED'}
 
 class TeacherTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):
-        super(TeacherTrainer, self).__init__(*args, **kwargs)
+        super(TeacherTrainer, self).__init__(model=Teacher(), *args, **kwargs)
         self.pred_terms = ('GT', 'IMG')

@@ -326,18 +326,21 @@ class LossTracker:
             plt.show()
         return filename, out_fig
 
-    def save(self, target, mode, save_path):
+    def save(self, target='preds', save_path=None):
         targets = {
             'loss': self.loss_buffer,
             'preds': self.pred_buffer}
 
+        if not save_path:
+            save_path = f"../saved/{self.name}/"
+
         if not os.path.exists(save_path):
             os.makedirs(save_path)
 
-        # self.loss_buffer['train'].epoch_log = {'loss1': [...]}
+        # self.loss_buffer.epoch_log = {'loss1': [...]}
  
-        for key, value in self.targets[target][mode].epoch_log.items():
+        for key, value in targets[target].epoch_log.items():
             print(f"Saving {target}: {key} of len {len(value)}...")
-            np.save(f"{save_path}_{target}_{mode}_{key}.npy", value.cpu().numpy())
+            np.save(f"{save_path}{target}_{key}.npy", value.cpu().numpy())
         
         print('All saved!')

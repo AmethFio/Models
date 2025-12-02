@@ -66,6 +66,7 @@ class ModelTrainer:
         self.model_paths = {module_name: None for module_name in self.model.get_modules().keys()}
         self.pred_terms = 'all'
 
+        self.model.to(self.device)
         self.set_optimizer()
 
     def set_optimizer(self, optimizer=torch.optim.Adam):
@@ -109,7 +110,7 @@ class ModelTrainer:
         if save_model:
             self.save(mode='best')
 
-    def test(self):
+    def test(self, *args, **kwargs):
         start = time.time()
         start_time = datetime.fromtimestamp(start)
         print(f"\033[32m=========={start_time.strftime('%Y-%m-%d %H:%M:%S')} {self.notion} {self.name} Test starting==========\033[0m")
@@ -117,13 +118,16 @@ class ModelTrainer:
         for idx, loss in self.tester(self.dataloader['test'], self.model):
             continue
 
+        self.plot_test()
+        self.tester.loss_tracker.save(*args, **kwargs)
+
         print(f"\nTest finished.")
 
-    def plot_test(self, pred_terms):
-        filename, out_fig = self.tester.loss_tracker.plot_preds(pred_terms)
-        plot.show()
+    def plot_test(self):
+        # Change the way of plotting preds specifically.
+        filename, out_fig = self.tester.loss_tracker.plot_preds(self.pred_terms)
         filename, out_fig = self.tester.loss_tracker.plot_cdf()
-        plt.show()
+
 
     def save(self, mode='checkpoint'):
         # mode = 'best' or 'chechpoint'
