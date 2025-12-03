@@ -232,6 +232,7 @@ class Student(nn.Module):
     def __init__(self, device=None, teacher=None):
         super(Student, self).__init__()
 
+        # Named children
         self.imgen = ImageEncoder(latent_dim=128)
         self.imgde = ImageDecoder(latent_dim=128)
         self.csien = CSIEncoderHPool(latent_dim=128)
@@ -253,18 +254,11 @@ class Student(nn.Module):
         self.rimg_weight = 1.e-5
         self.feature_weight = 10
 
-    def get_modules(self):
-        return {'imgen': self.imgen,
-                'imgde': self.imgde,
-                'csien': self.csien}
-
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.latent_loss(mu_s, mu_t) / mu_s.shape[0]
         logvar_loss = self.latent_loss(logvar_s, logvar_t) / logvar_s.shape[0]
         # latent_loss = self.alpha * mu_loss + (1 - self.alpha) * logvar_loss
-
         return mu_loss, logvar_loss
-
 
     def forward(self, data):
         csi, pd, rimg = data['csi'], data['pd'], data['shape']
@@ -285,8 +279,7 @@ class Student(nn.Module):
         'S_PRED': s_rimage,
         'T_LAT'     : t_z,
         'T_PRED': t_rimage,
-        'GT': rimg,
-        'IND': data['ind']
+        'GT': rimg
         }
 
         loss = {
@@ -305,6 +298,7 @@ class Teacher(nn.Module):
     def __init__(self, device=None):
         super(Teacher, self).__init__()
 
+        # Named children
         self.imgen = ImageEncoder(latent_dim=128)
         self.imgde = ImageDecoder(latent_dim=128)
 
@@ -315,10 +309,6 @@ class Teacher(nn.Module):
 
         self.beta = 0.5
         self.img_weight = 1.
-
-    def get_modules(self):
-        return {'imgen': self.imgen,
-                'imgde': self.imgde}
 
     def kl_loss(self, mu, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -338,7 +328,6 @@ class Teacher(nn.Module):
         'LAT'      : z,
         'IMG': r_recon,
         'GT': rimg,
-        'IND': data['ind']
                 }
 
         loss = {
@@ -355,7 +344,7 @@ class StudentTrainer(ModelTrainer):
         super(StudentTrainer, self).__init__(model=Student(), *args, **kwargs)
         self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN", 
                         train_module=['csien'])
-        self.pred_terms = {'GT', 'T_PRED', 'S_PRED'}
+        self.pred_terms = ('GT', 'T_PRED', 'S_PRED')
 
 class TeacherTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):

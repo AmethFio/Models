@@ -316,7 +316,7 @@ class LossTracker:
         preds['TAG'] = self.pred_buffer.epoch_log.get('TAG', None)
         preds = self.to_cpu(preds)
 
-        title = f"{self.name}_PREDS@{self.current_epoch}"
+        title = f"{self.name}_PREDS@ep{self.current_epoch}"
         filename = f"{title}.jpg"
 
         inds, tags = self.index_generator(preds['IND'], preds['TAG'])

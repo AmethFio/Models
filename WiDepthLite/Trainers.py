@@ -59,6 +59,7 @@ class ProgressBar:
 
 class ModelStep:
     def __init__(self):
+        # For progress bar
         self.epoch = 0
 
     def preprocess_gpu(self, data):
@@ -83,6 +84,8 @@ class ModelStep:
             # Calculate model output
             with autocast(**_autocast_arg):
                 preds, loss = model(_data_)
+                if 'ind' in _data_:
+                    preds['IND'] = _data_['ind']
             # Log into buffer
             loss_tracker.log_loss(loss)
             loss_tracker.log_preds(preds)
