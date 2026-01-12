@@ -112,7 +112,7 @@ class Trainer:
 
     def set_optimizer(self, model, optimizer, lr):
         if self.train_module == 'all':
-            self.train_module = list(model.named_children().values())
+            self.train_module = [module_name for module_name, _ in model.named_children()]
 
         trainable_params = []
         for name, module in model.named_children():

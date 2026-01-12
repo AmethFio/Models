@@ -1,0 +1,49 @@
+import torch
+
+def phase_difference_gpu(csi_real, csi_imag):
+    def cal_pd(u):
+        pd = u[:, 1:, 0] * u[:, :-1, 0].conj()
+        return torch.cat((torch.real(pd), torch.imag(pd)), axis=-1)
+    
+    try:
+        # CSI shape = batch * packet * sub * rx
+        csi_complex = csi_real + 1.j * csi_imag
+
+        # Reshape into batch * rx * (sub * packet)
+        u, *_ = torch.linalg.svd(csi.permute(0, 3, 2, 1).reshape(csi.shape[0], 3, -1), full_matrices=False)
+        # AoA = batch * 4 (real & imag of 2)
+        aoa = cal_pd(u)
+        
+        # Reshape into batch * sub * (rx * packet)
+        u, *_ = torch.linalg.svd(csi.permute(0, 2, 3, 1).reshape(csi.shape[0], 30, -1), full_matrices=False)
+        # ToF = batch * 58 (real & imag of 29)
+        tof = cal_pd(u)
+        
+        # Concatenate as a flattened vector
+        pd = torch.cat((aoa, tof), axis=-1)
+
+    except Exception as e:
+        print(f'FilterPD aborted due to {e}')
+    
+    return pd
+
+def filter_csi(self, data):
+    """
+    Per-sample process.
+    """
+        
+    csi = data['csi'].unsqueeze(0)
+
+    # Savgol filter
+    csi_real = sg_filter_gpu(torch.real(csi))
+    csi_imag = sg_filter_gpu(torch.imag(csi))
+
+    # Calculate pd
+    pd = phase_difference_gpu(csi_real, csi_imag).squeeze(0)
+
+    # Rearrange CSI (packet * sub * (rx * 2))
+    csi = torch.cat((csi_real, csi_imag), axis=-1).squeeze(0)
+    # (rx * 2) * sub * packet
+    csi = csi.permute(0, 2, 1)
+
+    return csi, pd

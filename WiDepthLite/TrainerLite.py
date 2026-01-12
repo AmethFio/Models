@@ -63,7 +63,7 @@ class ModelTrainer:
         self.tester = Tester(self.device, f"{self.name}_{self.notion}_TEST")
 
         self.final_log: str = ""
-        self.model_paths = {module_name: None for module_name in self.model.named_children().keys()}
+        self.model_paths = {module_name: None for (module_name, _) in self.model.named_children()}
         self.pred_terms = 'all'
 
         self.model.to(self.device)
@@ -132,7 +132,7 @@ class ModelTrainer:
     def save(self, mode='checkpoint'):
         # mode = 'best' or 'chechpoint'
         print("Saving model...")
-        for modelname, model in self.model.named_childrens().items():
+        for modelname, model in self.model.named_children():
             print(f"Saving {modelname}...")
             torch.save({
                 'model_state_dict': model.state_dict(),
@@ -171,8 +171,8 @@ class ModelTrainer:
                 hit = True
                 checkpoint = torch.load(file_path, map_location='cpu', weights_only=False)
 
-                self.model.named_childrens()[module_name].load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-                self.model.named_childrens()[module_name].to(self.device)
+                getattr(self.model, module_name).load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+                getattr(self.model, module_name).to(self.device)
 
                 print(f"Loaded model {module_name} from {file_path}!")
 
