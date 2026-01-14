@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import math
-from PoolingFlow import SpatialLatentFlow, TemporalSlotAttention
+from PoolingFlow import SpatialLatentFlow, TemporalSlotAttention, SpatialLearnablePooling
 
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding """
@@ -109,14 +109,14 @@ class ViTVideoEncoder(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
-        # x: (B, T, C, H, W)
-        B, T, C, H, W = x.shape
+        # x: (B, K, C, H, W)
+        B, K, C, H, W = x.shape
         
         # 1. Fold time into batch for spatial encoding
-        x = x.view(B * T, C, H, W)
+        x = x.view(B * K, C, H, W)
         
         # 2. Patch Embed
-        x = self.patch_embed(x) # (B*T, N, D)
+        x = self.patch_embed(x) # (B*K, N, D)
         
         # 3. Add Positional Embed
         x = x + self.pos_embed
@@ -131,12 +131,12 @@ class ViTVideoEncoder(nn.Module):
         # 4. Spatial Learnable Pooling
         x = self.pooling(x)
         x = self.norm(x)
-        uni_embeds = x
         
         # 5. Unfold time
-        # (B*T, N, D) -> (B, T*N, D)
+        # (B*K, N, D) -> (B, K*N, D)
         # We flatten all spatial temporal tokens into one sequence per batch item
-        x = x.view(B, T * x.shape[1], self.embed_dim)
+        x = x.view(B, K * x.shape[1], self.embed_dim)
+        uni_embeds = x.view(B, K, -1, self.embed_dim)
         
         # 6. Temporal Slot Attention
         slots = self.slot_attention(x) # (B, 4, D)

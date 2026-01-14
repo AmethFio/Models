@@ -1,6 +1,75 @@
 import torch
 import torch.nn as nn
 
+class TokenKTAttentionPooling(nn.Module):
+    """
+    Hierarchical attention over T then K.
+    Input : (B, K, T, D)
+    Output: (B, D)
+    """
+
+    def __init__(self, dim, hidden=None):
+        super().__init__()
+        hidden = hidden or dim // 2
+
+        # T-attention
+        self.attn_T = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, 1)
+        )
+
+        # K-attention
+        self.attn_K = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, 1)
+        )
+
+    def forward(self, tokens):
+        B, K, T, D = tokens.shape
+
+        # ---- T attention ----
+        attn_T = torch.softmax(self.attn_T(tokens), dim=2)
+        feat_K = (tokens * attn_T).sum(dim=2)  # (B, K, D)
+
+        # ---- K attention ----
+        attn_K = torch.softmax(self.attn_K(feat_K), dim=1)
+        feat = (feat_K * attn_K).sum(dim=1)    # (B, D)
+
+        return feat
+
+
+class TokenKAttentionPooling(nn.Module):
+    """
+    Attention over K dimension.
+    Input : (B, K, M, D)
+    Output: (B, M, D)
+    """
+
+    def __init__(self, dim, hidden=None):
+        super().__init__()
+        hidden = hidden or dim // 2
+
+        self.attn = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, 1)
+        )
+
+    def forward(self, tokens):
+        B, K, M, D = tokens.shape
+
+        # (B, K, M, 1)
+        attn_logits = self.attn(tokens)
+
+        attn = torch.softmax(attn_logits, dim=1)
+
+        # weighted sum over M
+        pooled = (tokens * attn).sum(dim=1)
+
+        return pooled  # (B, M, D)
+
 class SpatialLearnablePooling(nn.Module):
     """
     Learns a fixed number of tokens from variable spatial inputs using cross-attention.
@@ -173,6 +242,8 @@ class SpatialLatentFlow(nn.Module):
         for i in range(flow_depth):
             self.flow_layers.append(AffineCoupling(self.flat_dim, hidden_dim=flow_hidden_dim))
             
+        self.attn = TokenKAttentionPooling(dim=512)
+
         # Fixed Permutation (Reverse) to mix information between layers
         # In a real RealNVP, we'd use random or learned permutations. 
         # Here we just flip the channel order every other layer implicitly 
@@ -182,15 +253,24 @@ class SpatialLatentFlow(nn.Module):
         # but for simplicity, we will just rely on the fact that we can 
         # re-order in the coupling? No, coupling is fixed split.
         # We MUST permute.
-        
+
+    @staticmethod
+    def flow_loss(z, log_det_sum):
+        log_prob_z = -0.5 * (z ** 2).sum(dim=1) - 0.5 * z.size(1) * torch.log(torch.tensor(2 * torch.pi))
+        flow_loss = -(log_prob_z + log_det_sum).mean()
+        return flow_loss
+
     def forward(self, x):
         """
-        x: (B, N, D) or (B*T, N, D)
+        x: (B, K, M, D)
         Returns:
             z: (B, M*D) - Latent Gaussian vector
             log_det: (B,) - Log determinant of Jacobian
-            pooled: (B, M, D) - Intermediate pooled tokens
+            pooled: (B, M, D) - Intermediate pooled tokens ?
         """
+        # (B, K, M, D) -> (B, M, D)
+        x = self.attn(x)
+
         # (B, M, D)
         B = x.shape[0]
         
@@ -209,6 +289,8 @@ class SpatialLatentFlow(nn.Module):
             log_det_sum = log_det_sum + ld
             
         z = h
+        flow_loss = self.flow_loss(z, log_det_sum)
+
         return z, log_det_sum, flow_loss
         
     def inverse(self, z):
