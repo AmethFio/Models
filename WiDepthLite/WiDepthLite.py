@@ -98,11 +98,12 @@ class ImageEncoder(nn.Module):
 class ImageDecoder(nn.Module):
     name = 'imgde'
     
-    def __init__(self, latent_dim=128):
+    def __init__(self, latent_dim=128, teacher_training=True):
         super(ImageDecoder, self).__init__()
 
         self.latent_dim = latent_dim
         self.activate_func = nn.Sigmoid()
+        self.teacher_training = teacher_training
         
         block = [
                 [512, 256, 3, 1, 1],
@@ -150,8 +151,8 @@ class ImageDecoder(nn.Module):
         out = self.fclayers(x)
         out = self.cnn(out.view(-1, 512, 16, 16))
         # DO NOT use sigmoid with BCEWithLogitsLoss
-        # if not self.training:
-        #    out = torch.sigmoid(out)
+        if not self.teacher_training:
+           out = torch.sigmoid(out)
         return out.view(-1, 1, 128, 128)
 
 
@@ -229,12 +230,12 @@ class CSIEncoderHPool(nn.Module):
 
 class Student(nn.Module):
 
-    def __init__(self, device=None, teacher=None):
+    def __init__(self, device=None, teacher=None, teacher_training=False):
         super(Student, self).__init__()
 
         # Named children
         self.imgen = ImageEncoder(latent_dim=128)
-        self.imgde = ImageDecoder(latent_dim=128)
+        self.imgde = ImageDecoder(latent_dim=128, teacher_training=teacher_training)
         self.csien = CSIEncoderHPool(latent_dim=128)
 
         if device is not None:
@@ -341,9 +342,7 @@ class Teacher(nn.Module):
 
 class StudentTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):
-        super(StudentTrainer, self).__init__(model=Student(), *args, **kwargs)
-        self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN", 
-                        train_module=['csien'])
+        super(StudentTrainer, self).__init__(model=Student(), train_module=['csien'], *args, **kwargs)
         self.pred_terms = ('GT', 'T_PRED', 'S_PRED')
 
 class TeacherTrainer(ModelTrainer):

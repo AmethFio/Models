@@ -111,17 +111,22 @@ class Trainer:
         self.progress_step = self.progress_bar(self.modelstep)
 
     def set_optimizer(self, model, optimizer, lr):
+        print(f'Setting optimizer... trainable = {self.train_module}')
+        reqs = []
         if self.train_module == 'all':
             self.train_module = [module_name for module_name, _ in model.named_children()]
 
         trainable_params = []
         for name, module in model.named_children():
+            
             requires_grad = name in self.train_module
+            print(f'Setting {name} as {requires_grad}')
             for p in module.parameters():
                 p.requires_grad = requires_grad
 
             if requires_grad:
                 trainable_params += list(module.parameters())
+        print('Setting over')
 
         opt = None
         if len(trainable_params) > 0:

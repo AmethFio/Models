@@ -43,6 +43,7 @@ class ModelTrainer:
     """
     def __init__(self,
                 name='Model', dataloader: dict={}, model: nn.Module=None, 
+                train_module='all',
                 lr=1.e-4, device=0,
                 notion=''):
 
@@ -58,7 +59,7 @@ class ModelTrainer:
         self.lr = lr
         self.device = torch.device(f"cuda:{device}" if torch.cuda.is_available() else "cpu")
 
-        self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN")
+        self.trainer = Trainer(self.device, f"{self.name}_{self.notion}_TRAIN", train_module)
         self.validator = Validator(self.device, f"{self.name}_{self.notion}_VALID")
         self.tester = Tester(self.device, f"{self.name}_{self.notion}_TEST")
 
@@ -133,12 +134,13 @@ class ModelTrainer:
         # mode = 'best' or 'chechpoint'
         print("Saving model...")
         for modelname, model in self.model.named_children():
-            print(f"Saving {modelname}...")
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                }, 
-                       f"{self.save_path}{self.name}_model_{modelname}_{mode}.pth")
-        
+            if 'loss' not in modelname:
+                print(f"Saving {modelname}...")
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    }, 
+                        f"{self.save_path}{self.name}_model_{modelname}_{mode}.pth")
+            
         print(f"Saving optimizer...")
         torch.save({
             'optimizer_state_dict': self.optimizer.state_dict()
