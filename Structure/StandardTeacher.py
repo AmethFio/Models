@@ -57,7 +57,8 @@ class TeacherTrainer(BasicTrainer):
                            'LAT', 'TAG', 'IND')
         self.depth_loss = nn.MSELoss()
         self.center_loss = nn.MSELoss()
-        self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
+        self.rimg_loss = nn.MSELoss(reduction='sum')
+        self.cimg_loss = nn.BCEWithLogitsLoss(reduction='sum')
         
         self.losslog = MyLossCTR(name=self.name,
                            loss_terms=self.loss_terms,
@@ -75,10 +76,10 @@ class TeacherTrainer(BasicTrainer):
 
         self.weights = {
             'KL': self.beta,
-            'R_RECON': 1.e-3,
-            'C_RECON': 1.e-3,
-            'CENTER': 100.,
-            'DEPTH': 100.,
+            'R_RECON': 1.,
+            'C_RECON': 1.,
+            'CENTER': 1.,
+            'DEPTH': 1.,
         }
         
     def kl_loss(self, mu, logvar):
@@ -93,8 +94,8 @@ class TeacherTrainer(BasicTrainer):
         ret = self.teacher(rimg)
 
         kl_loss = self.kl_loss(ret['mu'], ret['logvar'])
-        r_recon_loss = self.img_loss(ret['rimage'], rimg) / ret['rimage'].shape[0]
-        c_recon_loss = self.img_loss(ret['cimage'], cimg) / ret['cimage'].shape[0]
+        r_recon_loss = self.rimg_loss(ret['rimage'], rimg) / ret['rimage'].shape[0]
+        c_recon_loss = self.cimg_loss(ret['cimage'], cimg) / ret['cimage'].shape[0]
         
         center_loss = self.center_loss(ret['center'], torch.squeeze(data['center']))
         depth_loss = self.depth_loss(ret['depth'], torch.squeeze(data['depth']))

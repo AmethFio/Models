@@ -325,6 +325,7 @@ class BasicTrainer:
         self.losslog = MyLossLog(self.name, self.loss_terms, self.pred_terms)
         
         self.current_epoch = 0
+        self.iter_counter = 0
         self.early_stopping_trigger = 'main'
         
         self.train_batches = 0
@@ -406,6 +407,7 @@ class BasicTrainer:
         progress_bar.set_description(f"{self.notion} {self.name} train: ep {self.current_epoch}/{self.epochs}")
 
         for idx, data in enumerate(self.dataloader['train'], 1):
+            self.iter_counter += 1
             TMP_LOSS = {loss: None for loss in self.loss_terms}
             
             # Randomly select samples
@@ -550,6 +552,7 @@ class BasicTrainer:
         self.epochs = 1000 if early_stop else self.epochs
         self.early_stopping = EarlyStopping(start_ep=self.start_ep,*args, **kwargs)
         self.temp_loss = {loss: None for loss in self.loss_terms}
+        VALID_LOSS = {loss: [] for loss in self.loss_terms}
         # ===============TRAIN & VALIDATE EACH EPOCH==============
         start = time.time()
         self.start_time = datetime.fromtimestamp(start)
@@ -612,7 +615,7 @@ class BasicTrainer:
         end = time.time()
         self.end_time = datetime.fromtimestamp(end)
         self.losslog.in_training = False
-        self.final_log(VALID_LOSS)
+        # self.final_log(VALID_LOSS)
         
         if save_model:
             self.save(mode='best')

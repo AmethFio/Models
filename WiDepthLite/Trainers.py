@@ -58,9 +58,10 @@ class ProgressBar:
 
 
 class ModelStep:
-    def __init__(self):
+    def __init__(self, loss_to_update='LOSS'):
         # For progress bar
         self.epoch = 0
+        self.loss_to_update = loss_to_update
 
     def preprocess_gpu(self, data):
         return data
@@ -76,49 +77,59 @@ class ModelStep:
             
         return data
 
-    def __call__(self, dataloader, model, device, loss_tracker):
+    def __call__(self, dataloader, model, device, loss_tracker, epoch=0):
         self.epoch += 1
         for idx, data in enumerate(dataloader, 1):
             # Prepare data
             _data_ = self.data_preprocess(data, device)
             # Calculate model output
             with autocast(**_autocast_arg):
-                preds, loss = model(_data_)
+                preds, loss = model(_data_, epoch)
                 if 'ind' in _data_:
                     preds['IND'] = _data_['ind']
+                if 'tag' in _data_:
+                    preds['TAG'] = _data_['tag']
             # Log into buffer
             loss_tracker.log_loss(loss)
             loss_tracker.log_preds(preds)
 
             # Return the total loss for update
-            yield idx, loss['LOSS']
+            yield idx, loss.get(self.loss_to_update, 'LOSS')
 
 
 class Trainer:
     name = 'TRAIN'
     def __init__(self, device, name='TRAIN',
-                train_module='all'):
+                train_module='all', 
+                train_set_name='train',
+                activate_interval=1,
+                loss_to_update='LOSS',
+                optimizer=torch.optim.Adam):
         self.name = name
         self.device = device
-        self.loss_tracker = LossTracker(name, self.device)
+        self.train_set_name = train_set_name
+        self.activate_interval = activate_interval
+        self.loss_tracker = LossTracker(name, device, activate_interval)
         self.scaler = GradScaler()
+        self.optimizer = None
 
         self.train_module = train_module
 
         self.progress_bar = ProgressBar(self.name)
-        self.modelstep = ModelStep()
+        self.modelstep = ModelStep(loss_to_update)
         # Decorate with progress bar
         self.progress_step = self.progress_bar(self.modelstep)
 
-    def set_optimizer(self, model, optimizer, lr):
-        print(f'Setting optimizer... trainable = {self.train_module}')
+    def set_optimizer(self, model, lr):
+        print(f'{self.name} Setting optimizer... trainable = {self.train_module}')
         reqs = []
         if self.train_module == 'all':
             self.train_module = [module_name for module_name, _ in model.named_children()]
 
         trainable_params = []
         for name, module in model.named_children():
-            
+            if 'loss' in name:
+                continue
             requires_grad = name in self.train_module
             print(f'Setting {name} as {requires_grad}')
             for p in module.parameters():
@@ -131,37 +142,41 @@ class Trainer:
         opt = None
         if len(trainable_params) > 0:
             opt = optimizer(trainable_params, lr, amsgrad=False)
-        return opt
+        self.optimizer = opt
 
     def epoch_behavior(self, optimizer):
         lr = self.loss_tracker.log_lr_change(optimizer)
         epoch_loss = self.loss_tracker.get_epoch_mean('train')
         
-    def __call__(self, dataloader, model, optimizer):
-        model.train()
+    def __call__(self, epoch, dataloader, model, optimizer):
+        if epoch % self.activate_interval == 0:
+            model.train()
 
-        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
-            
-            # Update
-            if torch.isnan(loss):
-                print(f"\033[31mPhase {self.name}: NaN value in loss, skipping update.\033[0m")
-            elif not torch.isfinite(loss):
-                print(f"\033[31mPhase {self.name}: Infinite value in loss, skipping update.\033[0m")
-            else:
-                self.scaler.scale(loss).backward()
-                self.scaler.step(optimizer)
-                self.scaler.update()
-                optimizer.zero_grad()
-            yield idx, loss
+            for idx, loss in self.progress_step(self.modelstep, dataloader[self.train_set_name], model, 
+            self.device, self.loss_tracker, epoch):
+                
+                # Update
+                if torch.isnan(loss):
+                    print(f"\033[31mPhase {self.name}: NaN value in loss, skipping update.\033[0m")
+                elif not torch.isfinite(loss):
+                    print(f"\033[31mPhase {self.name}: Infinite value in loss, skipping update.\033[0m")
+                else:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(optimizer)
+                    self.scaler.update()
+                    optimizer.zero_grad()
+                yield idx, loss
 
-        self.epoch_behavior(optimizer)
+            self.epoch_behavior(optimizer)
 
 
 class Validator:
-    def __init__(self, device, name='VALID'):
+    def __init__(self, device, name='VALID', valid_set_name='valid', activate_interval=1):
         self.name = name
         self.device = device
-        self.loss_tracker = LossTracker(name, self.device)
+        self.activate_interval = activate_interval
+        self.valid_set_name = valid_set_name
+        self.loss_tracker = LossTracker(name, device, activate_interval)
 
         self.best_val_loss = torch.inf
         self.best_val_epoch = 0
@@ -192,18 +207,21 @@ class Validator:
         if self.early_stopper.stop_flag:
             self.stop_flag = True
 
-    def __call__(self, dataloader, model, optimizer, early_stop, lr_decay):
-        model.eval()
+    def __call__(self, epoch, dataloader, model, optimizer, early_stop, lr_decay):
+        if epoch % self.activate_interval == 0:
+            model.eval()
 
-        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
-            yield idx, loss
-        self.epoch_behavior(loss, optimizer, early_stop, lr_decay)
+            for idx, loss in self.progress_step(self.modelstep, dataloader[self.valid_set_name], model, 
+            self.device, self.loss_tracker, epoch):
+                yield idx, loss
+            self.epoch_behavior(loss, optimizer, early_stop, lr_decay)
 
 
 class Tester:
-    def __init__(self, device, name='TEST'):
+    def __init__(self, device, name='TEST', test_set_name='test'):
         self.name = name
         self.device = device
+        self.test_set_name = test_set_name
         self.loss_tracker = LossTracker(name, self.device)
         
         self.progress_bar = ProgressBar(self.name)
@@ -217,7 +235,7 @@ class Tester:
     def __call__(self, dataloader, model):
         model.eval()
 
-        for idx, loss in self.progress_step(self.modelstep, dataloader, model, self.device, self.loss_tracker):
+        for idx, loss in self.progress_step(self.modelstep, dataloader[self.test_set_name], model, self.device, self.loss_tracker):
             yield idx, loss
         self.epoch_behavior()
 

@@ -152,7 +152,7 @@ class ImageDecoder(nn.Module):
         out = self.cnn(out.view(-1, 512, 16, 16))
         # DO NOT use sigmoid with BCEWithLogitsLoss
         if not self.teacher_training:
-           out = torch.sigmoid(out)
+           out = self.activate_func(out)
         return out.view(-1, 1, 128, 128)
 
 

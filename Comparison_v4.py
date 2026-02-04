@@ -58,10 +58,10 @@ class Tester:
         self.save_path = save_path
         
     def fetch_preds(self, pred='R_PRED'):
-        gt = self.trainer.losslog.preds['R_GT']
-        r_preds = self.trainer.losslog.preds[pred]
-        tags = self.trainer.losslog.preds['TAG']
-        abs_ind = self.trainer.losslog.preds['IND']
+        gt = np.array(self.trainer.losslog.preds['R_GT'])
+        r_preds = np.array(self.trainer.losslog.preds[pred])
+        tags = np.array(self.trainer.losslog.preds['TAG'])
+        abs_ind = np.array(self.trainer.losslog.preds['IND'])
         print(f'Loaded GT of {gt.shape}, {pred} of {r_preds.shape}, TAG of {tags.shape}, IND of {abs_ind.shape}')
         
         self.total_length = len(gt)

@@ -52,7 +52,7 @@ class SpatioTemporalEncoder(nn.Module):
         return uni_embeds, x
 
 class HarHead(nn.Module):
-    def __init__(self, embed_dim=512, num_classes=29):
+    def __init__(self, embed_dim=512, num_classes=27):
         super().__init__()
         C = embed_dim * 4 # (Total_Tokens)
         self.har_head = nn.Sequential(
@@ -195,7 +195,7 @@ class Student(nn.Module):
     def forward(self, data):
         uni_embeds, slots = self.encoder(data['csi'])
         har = self.har_head(slots)
-        har_loss = self.har_loss(har, data['har']) * self.har_weight
+        har_loss = self.har_loss(har, data['act']) * self.har_weight
 
         z, log_det_sum, flow_loss = self.flow(uni_embeds)
         flow_loss = flow_loss * self.flow_weight

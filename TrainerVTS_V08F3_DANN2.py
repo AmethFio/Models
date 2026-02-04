@@ -57,113 +57,6 @@ Domain_classifier_eval = ['imgen', 'cimgde', 'rimgde', 'ctrde', 'csien']
 feature_length = 512 * 7
 steps = 25
 
-
-class ImageEncoder(BasicImageEncoder):
-    def __init__(self, *args, **kwargs):
-        super(ImageEncoder, self).__init__(*args, **kwargs)
-
-        block = [[1, 128, 3, 2, 1],
-                [128, 128, 3, 1, 1],
-                [128, 128, 3, 2, 1],
-                [128, 128, 3, 1, 1],
-                [128, 256, 3, 2, 1],
-                [256, 256, 3, 1, 1],
-                [256, 512, 3, 1, 1],
-                [512, 512, 1, 1, 0],
-                [512, 6, 1, 1, 0]]
-        
-        cnn = []
-
-        for [in_ch, out_ch, ks, st, pd] in block:
-            if in_ch != 512:
-                cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm),
-                            nn.LeakyReLU(inplace=True)])
-            else:
-                cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd)])
-            
-        self.cnn = nn.Sequential(*cnn)
-
-        # 1 * 128 * 128
-        # 128 * 64 * 64
-        # Re
-        # 128 * 32 * 32
-        # Re
-        # 256 * 16 * 16
-        # Re
-        # 512 * 16* 16
-        # 6 * 16 * 16
-
-        self.fc_mu = nn.Sequential(
-            nn.Linear(6 * 16 * 16, self.latent_dim)
-        )
-
-        self.fc_logvar = nn.Sequential(
-            nn.Linear(6 * 16 * 16, self.latent_dim)
-        )
-
-    def __str__(self):
-        return f"IMGEN{version}"
-
-    def forward(self, x):
-        out = self.cnn(x)
-        out = out.view(-1, 6 * 16 * 16)
-        mu = self.fc_mu(out)
-        logvar = self.fc_logvar(out)
-        z = reparameterize(mu, logvar)
-
-        return z, mu, logvar, out
-
-
-class ImageDecoder(BasicImageDecoder):
-    def __init__(self, *args, **kwargs):
-        super(ImageDecoder, self).__init__(*args, **kwargs)
-
-        block = [
-                [512, 256, 3, 1, 1],
-                [256, 256, 4, 2, 1],
-                [256, 128, 3, 1, 1],
-                [128, 128, 4, 2, 1],
-                [128, 128, 4, 2, 1],
-                [128, 1, 3, 1, 1]]
-        
-        cnn = []
-        # cnn.extend([nn.Conv2d(6, 512, 1, 1, 0)])
-        
-        for [in_ch, out_ch, ks, st, pd] in block:
-            if ks == 3:
-                cnn.extend([nn.Conv2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm)
-                            ])
-            else:
-                cnn.extend([nn.ConvTranspose2d(in_ch, out_ch, ks, st, pd),
-                            batchnorm_layer(out_ch, self.batchnorm),
-                            nn.LeakyReLU(inplace=True)])
-        
-        self.cnn = nn.Sequential(*cnn, self.active_func)
-
-        # 6 * 16 * 16
-        # 512 * 16 * 16
-        # 256 * 16 * 16
-        # 256 * 32 * 32
-        # 128 * 32 * 32
-        # 128 * 64 * 64
-        # 128 * 128 * 128
-        # 1 * 128 * 128
-
-        self.fclayers = nn.Sequential(
-            nn.Linear(self.latent_dim, 512 * 16 * 16),
-        )
-
-    def __str__(self):
-        return f"IMGDE{version}"
-
-    def forward(self, x):
-        out = self.fclayers(x)
-        out = self.cnn(out.view(-1, 512, 16, 16))
-        return out.view(-1, 1, 128, 128)
-
-
 class CenterDecoder(nn.Module):
     name = 'ctrde'
 
@@ -190,15 +83,17 @@ class CenterDecoder(nn.Module):
         return center, depth
 
 
-class CSIEncoder(BasicCSIEncoder):
+class CSIEncoder(nn.Module):
     def __init__(self, lstm_steps=steps, lstm_feature_length=feature_length, *args, **kwargs):
-        super(CSIEncoder, self).__init__(lstm_feature_length=lstm_feature_length, *args, **kwargs)
+        super(CSIEncoder, self).__init__(*args, **kwargs)
 
         self.lstm_steps = lstm_steps
+        self.lstm_feature_length = lstm_feature_length
         self.csi_feature_length = 128
         self.pd_feature_length = 128
         self.feature_length = 1536
         self.pd_length = 62
+        self.batchnorm = 'identity'
 
         # 6 * 30 * 100
         # 128 * 28 * 98
@@ -318,7 +213,7 @@ class GradientReversalLayer(Function):
 class TeacherTrainer(BasicTrainer):
     def __init__(self,
                  beta=0.5,
-                 recon_lossfunc=nn.BCELoss(reduction='sum'),
+                 recon_lossfunc=nn.BCEWithLogitsLoss(reduction='sum'),
                  *args, **kwargs):
         super(TeacherTrainer, self).__init__(*args, **kwargs)
 
@@ -378,8 +273,9 @@ class TeacherTrainer(BasicTrainer):
                           'CTR': center_loss, 
                           'DPT': depth_loss
                           }
-        
-        return {'R_GT': rimg,
+
+        LOSS = self.temp_loss
+        PREDS = {'R_GT': rimg,
                 'C_GT': cimg,
                 'R_PRED': rimg_re,
                 'C_PRED': cimg_re,
@@ -391,6 +287,8 @@ class TeacherTrainer(BasicTrainer):
                 'TAG': data['tag'],
                 'IND': data['ind']
                 }
+
+        return PREDS, LOSS
 
     def plot_test(self, select_ind=None, select_num=8, autosave=False, **kwargs):
         figs: dict = {}
@@ -450,7 +348,7 @@ class StudentTrainer(BasicTrainer):
             'imgen' : ImageEncoder(latent_dim=128).to(self.device),
             'cimgde': ImageDecoder(latent_dim=128).to(self.device),
             'rimgde': ImageDecoder(latent_dim=128).to(self.device2),
-            'csien' : CSIEncoder(latent_dim=128, lstm_steps=lstm_steps).to(self.device),
+            'csien' : CSIEncoder().to(self.device),
             'ctrde': CenterDecoder().to(self.device),
             'dmnde': DomainClassifier().to(self.device)
                 }

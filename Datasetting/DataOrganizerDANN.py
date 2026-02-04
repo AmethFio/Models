@@ -238,7 +238,119 @@ def gen_double_valid_loaders(data_organizer, subset_ratio=1, batch_size=64, num_
     
     return source_train_loader, source_valid_loader, target_valid_loader, target_test_loader, current_test
     
-    
-    
 
-    
+
+class Removal:
+    """
+    Remove unpaired segments from dataset.
+    """
+    def __init__(self):
+        self.conditions =  [('0709A10', 1, 8),
+                            ('0709A10', 1, 9),
+                            ('0709A53', 6, 6),
+                            ('0709A53', 6, 7)]
+        # (csi, group, segment) tuples
+        
+    def __call__(self, labels):
+        for (csi, group, segment) in self.conditions:
+            removal = (labels['csi']==csi) & (labels['group']==group) & (labels['segment']==segment)
+            labels = labels.loc[~removal]
+        return labels
+
+
+class NewDataOrganizer:
+    def __init__(self, label_path, data_path='./'):
+        if isinstance(label_path, list):
+            self.label = pd.concat([pd.read_csv(p) for p in label_path])
+        else:
+            self.label = pd.read_csv(label_path)
+            
+        print('Label loaded.')
+        self.data = {
+            'rimg': {},
+            'csi': {},
+            'cimg': {},
+            'ctr': {},
+            'dpt': {},
+            'pd': {}
+        }
+        self.removal = Removal()
+        self.data_path = data_path
+        self.label = self.removal(self.label)
+        self.load_data()
+
+    def load_data(self):
+        print(f'Loading data from {self.data_path} ...')
+        bags = self.label.drop_duplicates(subset=['env', 'bag'])
+        print(f'Total {len(bags)} unique bags to load.\n')
+
+        for row in bags.itertuples():
+            bag = row.bag
+            env = row.env
+            bag_path = os.path.join(self.data_path, env)
+            self.data['rimg'][bag] = np.load(os.path.join(bag_path, f'{bag}-rimg.npy'), mmap_mode='r')
+            self.data['cimg'][bag] = np.load(os.path.join(bag_path, f'{bag}-cimg.npy'), mmap_mode='r')
+            self.data['ctr'][bag] = np.load(os.path.join(bag_path, f'{bag}-ctr.npy'), mmap_mode='r')
+            self.data['dpt'][bag] = np.load(os.path.join(bag_path, f'{bag}-dpt.npy'), mmap_mode='r')
+            print(f'Loaded {env} - {bag}')
+        
+        csis = self.label.drop_duplicates(subset=['env', 'csi'])
+        print(f'\nTotal {len(csis)} unique CSIs to load.\n')
+        for row in csis.itertuples():
+            csi = row.csi
+            env = row.env
+            csi_path = os.path.join(self.data_path, env)
+            self.data['csi'][csi] = np.load(os.path.join(csi_path, f'{csi}-csi.npy'), mmap_mode='r')
+            self.data['pd'][csi] = np.load(os.path.join(csi_path, f'{csi}-pd.npy'), mmap_mode='r')
+            print(f'Loaded {env} - {csi}')
+        print(f"\nLoad complete!")
+
+    def gen_loaders(self, batch_size=64, num_workers=10, split_ratio=0.8, pin_memory=True, shuffle_test=False):
+        train_loader, valid_loader, test_loader = None, None, None
+        train_size, valid_size, test_size = 0, 0, 0
+
+        def worker_init_fn(worker_id):
+            np.random.seed(worker_id)
+
+        if split_ratio < 1:
+            dataset = MyDataset(self.data, self.label)
+            train_size = int(split_ratio * len(dataset))
+            valid_size = len(dataset) - train_size
+            train_set, valid_set = random_split(dataset, [train_size, valid_size])
+
+            train_loader = DataLoader(train_set, 
+                                    batch_size=batch_size, 
+                                    num_workers=num_workers,
+                                    drop_last=True, 
+                                    pin_memory=pin_memory,
+                                    worker_init_fn=worker_init_fn
+                                    )
+
+            valid_loader = DataLoader(valid_set, 
+                                    batch_size=batch_size, 
+                                    num_workers=num_workers,
+                                    drop_last=True, 
+                                    pin_memory=pin_memory,
+                                    worker_init_fn=worker_init_fn
+                                    )
+
+        else:
+            dataset = MyDataset(self.data, self.label)
+            test_size = len(dataset)
+            test_set = dataset
+
+            test_loader = DataLoader(test_set, 
+                                        batch_size=batch_size, 
+                                        num_workers=num_workers,
+                                        pin_memory=pin_memory,
+                                        drop_last=True,
+                                        shuffle=shuffle_test,
+                                        worker_init_fn=worker_init_fn
+                                    )
+
+        print(f' Train dataset length = {train_size}\n'
+              f' Valid dataset length = {valid_size}\n'
+              f' Test dataset length = {test_size}\n'
+              f' Batch size = {batch_size}')
+
+        return train_loader, valid_loader, test_loader

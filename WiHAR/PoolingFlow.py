@@ -40,16 +40,18 @@ class TokenKTAttentionPooling(nn.Module):
         return feat
 
 
-class TokenKAttentionPooling(nn.Module):
+class TokenAttentionPooling(nn.Module):
     """
-    Attention over K dimension.
+    Attention over K or M dimension.
     Input : (B, K, M, D)
-    Output: (B, M, D)
+    Output: (B, M, D) (axis=1) or (B, K, D) (axis=2)
     """
 
-    def __init__(self, dim, hidden=None):
+    def __init__(self, dim, hidden=None, axis=1, with_mean=False):
         super().__init__()
+        self.axis = axis
         hidden = hidden or dim // 2
+        self.with_mean = with_mean
 
         self.attn = nn.Sequential(
             nn.Linear(dim, hidden),
@@ -63,18 +65,21 @@ class TokenKAttentionPooling(nn.Module):
         # (B, K, M, 1)
         attn_logits = self.attn(tokens)
 
-        attn = torch.softmax(attn_logits, dim=1)
+        attn = torch.softmax(attn_logits, dim=self.axis)
 
-        # weighted sum over M
-        pooled = (tokens * attn).sum(dim=1)
+        # weighted sum over M or K
+        pooled = (tokens * attn).sum(dim=self.axis)
 
-        return pooled  # (B, M, D)
+        if self.with_mean:
+            pooled = torch.mean(pooled, dim=1)
+
+        return pooled  # (B, M, D) or (B, K, D)
 
 class SpatialLearnablePooling(nn.Module):
     """
     Learns a fixed number of tokens from variable spatial inputs using cross-attention.
     """
-    def __init__(self, dim, num_tokens=8, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
+    def __init__(self, dim, num_tokens=8, num_heads=8, qkv_bias=False, attn_drop=0.3, proj_drop=0.3):
         super().__init__()
         self.num_tokens = num_tokens
         self.num_heads = num_heads
@@ -158,6 +163,10 @@ class TemporalSlotAttention(nn.Module):
         # Initialize slots for the batch
         slots = self.slots_mu.expand(B, -1, -1) + \
                 self.slots_log_sigma.exp().expand(B, -1, -1) * torch.randn_like(self.slots_mu.expand(B, -1, -1))
+
+        if self.training:
+            noise = torch.randn_like(slots) * 0.05
+            slots = slots + noise
         
         q = self.to_q(self.norm_slots(slots)).reshape(B, self.num_slots, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
         k = self.to_k(self.norm_input(x)).reshape(B, N, self.num_heads, D // self.num_heads).permute(0, 2, 1, 3)
@@ -242,7 +251,7 @@ class SpatialLatentFlow(nn.Module):
         for i in range(flow_depth):
             self.flow_layers.append(AffineCoupling(self.flat_dim, hidden_dim=flow_hidden_dim))
             
-        self.attn = TokenKAttentionPooling(dim=512)
+        self.attn = TokenAttentionPooling(dim=512)
 
         # Fixed Permutation (Reverse) to mix information between layers
         # In a real RealNVP, we'd use random or learned permutations. 
@@ -257,7 +266,7 @@ class SpatialLatentFlow(nn.Module):
     @staticmethod
     def flow_loss(z, log_det_sum):
         log_prob_z = -0.5 * (z ** 2).sum(dim=1) - 0.5 * z.size(1) * torch.log(torch.tensor(2 * torch.pi))
-        flow_loss = -(log_prob_z + log_det_sum).mean()
+        flow_loss = -(log_prob_z + log_det_sum)
         return flow_loss
 
     def forward(self, x):

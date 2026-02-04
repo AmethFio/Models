@@ -141,7 +141,7 @@ class IndexGenerator:
         if not self.fixed_inds:
             self.select_ind = inds
 
-        if tags:
+        if tags is not None:
             self.select_tag = tags[self.select_ind]
 
         return self.select_ind, self.select_tag
@@ -170,7 +170,7 @@ class LossPlotter:
 
         return axes
 
-    def plot_track(self, losses:dict, line_color: str='blue', line_label='', fig=None, title=None, lr_change_log: dict=None):
+    def plot_track(self, epoch_axis: list, losses: dict, line_color: str='blue', line_label='', fig=None, title=None, lr_change_log: dict=None):
 
         if not fig:
             fig, axes = self.plot_settings(title, len(losses))
@@ -185,7 +185,7 @@ class LossPlotter:
             axes = fig.get_axes()
 
         for ax, loss in zip(axes, list(losses.keys())):
-            ax.plot(losses[loss], line_color, label=line_label)
+            ax.plot(epoch_axis, losses[loss], line_color, label=line_label)
             ax.set_title(loss, fontweight="bold")
             ax.legend()
 
@@ -234,7 +234,7 @@ class PredPlotter:
                 if tags is None:
                     subtitle = str(ind)
                 else:
-                    f"{'-'.join(map(str, map(int, tags[i])))}"
+                    subtitle = f"{'-'.join(map(str, map(int, tags[i])))}"
                 ax.set_title(subtitle)
 
             subfig.colorbar(img, ax=axes, shrink=0.8)
@@ -247,11 +247,13 @@ class PredPlotter:
 # Loss Tracker on GPU
 # Plotting and saving involves GPU-to-CPU transition
 class LossTracker:
-    def __init__(self, name, device):
+    def __init__(self, name, device, activate_interval=1):
 
         self.name = name
         self.loss_buffer = LossBuffer(device)
         self.pred_buffer = PredBuffer(device)
+        self.activate_interval = activate_interval
+        self.epoch_axis = []
 
         self.loss_plotter = LossPlotter()
         self.pred_plotter = PredPlotter()
@@ -284,6 +286,7 @@ class LossTracker:
 
     def get_epoch_mean(self, mode=''):
         if mode == 'train':
+            self.epoch_axis.append(self.current_epoch)
             self.current_epoch += 1
         ret = self.loss_buffer.epoch_set()
         preds = self.pred_buffer.epoch_set()
@@ -299,12 +302,15 @@ class LossTracker:
             plt.show()
         return filename, out_fig
 
-    def plot_cdf(self):
-        cpu_losses = self.to_cpu(self.loss_buffer)
+    def plot_cdf(self, show=True):
+        cpu_losses = self.to_cpu(self.loss_buffer.buffer)
 
-        title = f"{self.name}_{mode.upper()}@ep{self.current_epoch}"
+        title = f"{self.name}_CDF@ep{self.current_epoch}"
         filename = f"{title}.jpg"
-        out_fig = self.loss_plotter.plot_cdf(test_losses, title)
+        out_fig = self.loss_plotter.plot_cdf(cpu_losses, title)
+
+        if show:
+            plt.show()
         return filename, out_fig
 
     def plot_preds(self, pred_terms='all', show=True):

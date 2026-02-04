@@ -1,7 +1,167 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from PoolingFlow import SpatialLatentFlow, TemporalSlotAttention, SpatialLearnablePooling
+from TrainerLite import ModelTrainer
+
+class DiceLossWithLogits(nn.Module):
+    def __init__(self, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, logits, target):
+        """
+        logits: (B, 1, H, W)
+        target: (B, 1, H, W)
+        return: (B,)
+        """
+        pred = torch.sigmoid(logits)
+
+        pred = pred.flatten(start_dim=1)
+        target = target.flatten(start_dim=1)
+
+        intersection = (pred * target).sum(dim=1)
+        union = pred.sum(dim=1) + target.sum(dim=1)
+
+        dice = (2.0 * intersection + self.eps) / (union + self.eps)
+        loss = 1.0 - dice            # (B,)
+
+        return loss
+
+
+class SoftXORLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, gt):
+        pred = torch.sigmoid(pred)
+        return (pred * (1 - gt) + (1 - pred) * gt).mean()
+
+
+class ImageGradientLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def gradient(img):
+        dx = img[:, :, :, 1:] - img[:, :, :, :-1]
+        dy = img[:, :, 1:, :] - img[:, :, :-1, :]
+        return dx.abs().mean() + dy.abs().mean()
+
+    def forward(self, pred, gt):
+        delta_img = pred - gt
+        return self.gradient(delta_img)
+
+
+class SilhouetteWeightLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, gt):
+        fg = (gt > 0).float()              # 人体区域
+        kernel = torch.ones(1, 1, 9, 9).to(gt.device)
+        fg_dilate = F.conv2d(fg, kernel, padding=4) > 0
+        weight = fg_dilate.float()
+
+        pixel_loss = F.l1_loss(pred, gt, reduction='none')
+        loss = (pixel_loss * weight).sum() / (weight.sum() + 1.e-6)
+
+        return loss
+
+
+class CenterWeightLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, gt):
+        mask = (gt > 0.1).float()       # 人体
+        weight = 1.0 + 4.0 * mask      # 人体 ×5 权重
+
+        loss = ((pred - gt).abs() * weight).mean()
+
+        return loss
+
+
+class XorWeightLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, gt):
+        mask = (gt > 0.1).float()       # 人体
+        weight = 1.0 + 4.0 * mask      # 人体 ×5 权重
+
+        shape_loss = torch.logical_xor(
+            (pred > 0.5), (gt > 0.5)
+        ).float()
+
+        loss = (shape_loss * weight).mean()
+
+        return loss
+
+
+class EdgeWightLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred, gt):
+        dx = gt[:, :, :, 1:] - gt[:, :, :, :-1]
+        dy = gt[:, :, 1:, :] - gt[:, :, :-1, :]
+        edge = F.pad(dx.abs(), (0,1,0,0)) + F.pad(dy.abs(), (0,0,0,1))
+        weight = torch.clamp(edge * 5.0 + 1.0, max=10.0)
+
+        pixel_loss = F.l1_loss(pred, gt, reduction='none')
+        loss = (pixel_loss * weight).mean()
+
+        return loss
+
+
+class CropbyGT:
+    def __init__(self, threshold=0.1, margin=5):
+        self.threshold = threshold
+        self.margin = margin
+
+    def bbox_from_gt(self, gt):
+        mask = gt > self.threshold
+        # mask: (H, W), bool
+        ys, xs = torch.where(mask)
+        if len(xs) == 0:
+            return None
+        return ys.min(), ys.max(), xs.min(), xs.max()
+
+    def __call__(self, pred, gt):
+        B, C, H, W = pred.shape
+        crops_pred, crops_gt = [], []
+
+        for b in range(B):
+            box = self.bbox_from_gt(gt[b, 0])
+            if box is None:
+                crops_pred.append(pred[b:b+1])
+                crops_gt.append(gt[b:b+1])
+                continue
+
+            y1, y2, x1, x2 = box
+            y1 = max(0, y1 - self.margin)
+            x1 = max(0, x1 - self.margin)
+            y2 = min(H, y2 + self.margin)
+            x2 = min(W, x2 + self.margin)
+
+            crops_pred.append(pred[b:b+1, :, y1:y2, x1:x2])
+            crops_gt.append(gt[b:b+1, :, y1:y2, x1:x2])
+
+        return crops_pred, crops_gt
+
+
+
+class GEGLU_proj(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super(GEGLU_proj, self).__init__()
+        self.proj = nn.Linear(in_dim, 2 * out_dim)
+
+    def forward(self, x):
+        x = self.proj(x)
+        x, gates = x.chunk(2, dim=-1)
+        return x * F.gelu(gates)
 
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding """
@@ -80,16 +240,16 @@ class Block(nn.Module):
 
 
 class ViTVideoEncoder(nn.Module):
-    def __init__(self, img_size=128, patch_size=16, in_chans=1, embed_dim=512, num_heads=8, num_slots=4):
+    def __init__(self, img_size=128, patch_size=16, in_chans=1, embed_dim=512, num_heads=16, num_slots=4, depth=6):
         super().__init__()
         self.embed_dim = embed_dim
         self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
-        # self.blocks = nn.ModuleList([
-        #     Block(embed_dim, num_heads) for _ in range(depth)
-        # ])
+        self.blocks = nn.ModuleList([
+            Block(embed_dim, num_heads) for _ in range(depth)
+        ])
 
         self.pooling = SpatialLearnablePooling(embed_dim)
         
@@ -124,9 +284,9 @@ class ViTVideoEncoder(nn.Module):
         # embeds = x
         
         # # 4. Transformer Encoder
-        # for block in self.blocks:
-        #     x = block(x)
-        # x = self.norm(x)
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
 
         # 4. Spatial Learnable Pooling
         x = self.pooling(x)
@@ -143,24 +303,8 @@ class ViTVideoEncoder(nn.Module):
         
         return uni_embeds, slots
 
-def get_sinusoid_encoding_table(n_position, d_hid, padding_idx=None):
-    ''' Sinusoid position encoding table '''
 
-    def cal_angle(position, hid_idx):
-        return position / (10000 ** (2 * (hid_idx // 2) / d_hid))
-
-    def get_posi_angle_vec(position):
-        return [cal_angle(position, hid_j) for hid_j in range(d_hid)]
-
-    sinusoid_table = torch.tensor([get_posi_angle_vec(pos_i) for pos_i in range(n_position)], dtype=torch.float)
-
-    sinusoid_table[:, 0::2] = torch.sin(sinusoid_table[:, 0::2])  # dim 2i
-    sinusoid_table[:, 1::2] = torch.cos(sinusoid_table[:, 1::2])  # dim 2i+1
-
-    return sinusoid_table
-
-
-class SimpleTimeDecoder(nn.Module):
+class TimeConditionalDecoder(nn.Module):
     """
     Decodes a frame at a specific time t given the slot tokens.
     Designed for robustness: simple Cross-Attention to force encoder to learn good slots.
@@ -184,10 +328,35 @@ class SimpleTimeDecoder(nn.Module):
         self.norm_q = nn.LayerNorm(embed_dim)
         self.norm_kv = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
-        
+
+        # Stronger attention
+        self.ffn = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Linear(embed_dim * 4, embed_dim),
+        )
+
         # Output Projection: Project back to pixel space
         self.output_proj = nn.Linear(embed_dim, patch_size * patch_size * in_chans)
         
+        # More informative
+        # self.output_proj = nn.Sequential(
+        #     nn.LayerNorm(embed_dim),
+        #     nn.Linear(embed_dim, embed_dim * 4),
+        #     nn.GELU(),
+        #     nn.Linear(embed_dim * 4, patch_size * patch_size * in_chans),
+        # )
+        
+        # Refine conv
+        self.conv_refine = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 1, 1)
+        )
+
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -216,15 +385,16 @@ class SimpleTimeDecoder(nn.Module):
         
         # Add Time to Spatial Queries (Broadcasting time across all patches)
         q = spatial_q + time_emb # (B, N, D)
+        #q = spatial_q
         
         # 2. Cross Attention
         # Connect to Slots
         q_norm = self.norm_q(q)
         kv_norm = self.norm_kv(slots)
         
-        # attn_output, _ = self.attn(query=q_norm, key=kv_norm, value=kv_norm)
         # Note: PyTorch MultiheadAttention expects (B, S, E) if batch_first=True
         x, _ = self.attn(q_norm, kv_norm, kv_norm)
+        x = x + self.ffn(x)
         
         # 3. Reconstruct Patches
         x = self.output_proj(x) # (B, N, P*P*C)
@@ -236,48 +406,107 @@ class SimpleTimeDecoder(nn.Module):
         x = x.transpose(1, 2).reshape(B, 1, p, p, h, w)
         x = torch.einsum('nchpwq->ncwhqp', x)
         x = x.reshape(B, 1, h * p, w * p)
+        x = self.conv_refine(x)
         
         return x
 
-class ViTVideoAutoencoder(nn.Module):
-    def __init__(self, img_size=128, patch_size=16, embed_dim=512, num_slots=4):
-        super().__init__()
-        self.encoder = ViTVideoEncoder(img_size, patch_size, embed_dim=embed_dim, num_slots=num_slots)
-        self.decoder = SimpleTimeDecoder(img_size, patch_size, embed_dim=embed_dim)
-        self.recon_loss = nn.MSELoss(reduction='sum')
-        
-    def forward(self, data, t):
-        # x: (B, T, C, H, W)
-        # t: (B,) target time for reconstruction [0, T]
-        uni_embeds, slots = self.encoder(data['dimg'])
-        recon = self.decoder(slots, t)
-
-        loss = self.recon_loss(recon, data['dimg'][:, t[0]])
-
-        LOSS = {
-            'LOSS': loss
-        }
-
-        RET = {
-            'PRED': recon,
-            'GT': data['dimg'][:, t[0]]
-        }
-
-
-        return RET, LOSS
-
 
 class ViTTeacher(nn.Module):
-    def __init__(self, img_size=128, patch_size=16, embed_dim=512, num_slots=4):
+    def __init__(self, img_size=128, patch_size=16, embed_dim=512, num_slots=4, num_heads=8):
         super().__init__()
-        self.encoder = ViTVideoEncoder(img_size, patch_size, embed_dim=embed_dim, num_slots=num_slots)
-        self.decoder = SimpleTimeDecoder(img_size, patch_size, embed_dim=embed_dim)
+        self.encoder = ViTVideoEncoder(img_size, patch_size, embed_dim=embed_dim, num_slots=num_slots, num_heads=num_heads)
+        self.decoder = TimeConditionalDecoder(img_size, patch_size, embed_dim=embed_dim)
         self.flow = SpatialLatentFlow(embed_dim)
 
-        self.recon_loss = nn.BCEWithLogitsLoss()
+        self.crop = CropbyGT()
+
+        self.dice_loss = DiceLossWithLogits()
+        self.bce_loss = nn.BCEWithLogitsLoss(reduction='none')
+        self.mse_loss = nn.MSELoss(reduction='none')
+        self.xor_loss = SoftXORLoss()
+        self.edge_loss = ImageGradientLoss()
+        self.silweight_loss = SilhouetteWeightLoss()
+        self.edgeweight_loss = EdgeWightLoss()
+        self.centerweight_loss = CenterWeightLoss()
+        self.xorweight_loss = XorWeightLoss()
 
         self.recon_weight = 1.
-        self.flow_weight = 1.
+        self.flow_weight = 0.
+
+        self.bce_weight = 1.
+        self.mse_weight = 0
+        self.dice_weight = 0.5 * 0
+        self.xor_weight = 1.* 0
+        self.edge_weight = 10. 
+
+        self.silweight_weight = 0.
+        self.edgeweight_weight = 0.
+        self.centerweight_weight = 0.
+        self.xorweight_weight = 1.
+
+        self.foreground_weight = 2. * 0
+        self.constant_weight = 0.5 * 0
+
+    def foreground_area_loss(self, logits, target, min_ratio=0.3):
+        """
+        Background regularization.
+        logits: (B, 1, H, W)
+        target: (B, 1, H, W)
+        """
+        pred = torch.sigmoid(logits)
+
+        pred_area = pred.flatten(1).mean(dim=1)        # (B,)
+        gt_area   = target.flatten(1).mean(dim=1)      # (B,)
+
+        # 要求 pred_area >= min_ratio * gt_area
+        loss = torch.relu(min_ratio * gt_area - pred_area)
+        return loss    # (B,)
+
+    def spatial_variance_loss(self, logits):
+        """
+        Constant regularization.
+        logits: (B, 1, H, W)
+        """
+        x = logits.flatten(2)      # (B, 1, HW)
+        var = x.var(dim=2)         # (B, 1)
+        return torch.relu(1e-3 - var.squeeze(1))
+
+    def recon_loss(self, recon, gt):
+
+        bce_loss = self.bce_loss(recon, gt).flatten(start_dim=1).mean(dim=1)
+        mse_loss = self.mse_loss(recon, gt).flatten(start_dim=1).mean(dim=1)
+        dice_loss = self.dice_loss(recon, gt)
+        xor_loss = self.xor_loss(recon, gt)
+        edge_loss = self.edge_loss(recon, gt)
+        silweight_loss = self.silweight_loss(recon, gt)
+        edgeweight_loss = self.edgeweight_loss(recon, gt)
+        centerweight_loss = self.centerweight_loss(recon, gt)
+        xorweight_loss = self.xorweight_loss(recon, gt)
+
+        recon_loss = bce_loss * self.bce_weight
+        recon_loss += mse_loss * self.mse_weight
+        recon_loss += dice_loss * self.dice_weight
+        recon_loss += xor_loss * self.xor_weight
+        recon_loss += edge_loss * self.edge_weight
+
+        recon_loss += silweight_loss * self.silweight_weight
+        recon_loss += edgeweight_loss * self.edgeweight_weight
+        recon_loss += centerweight_loss * self.centerweight_weight
+        recon_loss += xorweight_loss * self.xorweight_weight
+
+        foreground_loss = self.foreground_area_loss(recon, gt)
+        constant_loss = self.spatial_variance_loss(recon)
+        recon_loss += foreground_loss * self.foreground_weight
+        recon_loss += constant_loss * self.constant_weight
+
+        # r, g = self.crop(recon, gt)
+        # crop_loss = 0.
+        # for r_, g_ in zip(r, g):
+        #     crop_loss += F.l1_loss(r_, g_)
+        # crop_loss = crop_loss / len(r_)
+
+        # recon_loss += crop_loss * 10
+        return recon_loss
     
     def forward(self, data):
         # Find number of samples T in x
@@ -285,30 +514,46 @@ class ViTTeacher(nn.Module):
         uni_embeds, slots = self.encoder(data['dimg'])
 
         B, T = data['dimg'].size(0), data['dimg'].size(1)
-        t = torch.randint(0, T, (B,))
+        t = torch.randint(0, T, (B,), device=data['dimg'].device)
         t0 = t[0]
+        gt = data['dimg'][:, t0]
         recon = self.decoder(slots, t)
 
         z, log_det_sum, flow_loss = self.flow(uni_embeds)
 
         flow_loss = flow_loss * self.flow_weight
-        recon_loss = self.recon_loss(recon, data['dimg'][:, t0]) * self.recon_weight
+        recon_loss = self.recon_loss(recon, gt) * self.recon_weight
+
+        # Reduce batch due to being kept by flow
+        flow_loss = torch.mean(flow_loss)
+        recon_loss = torch.mean(recon_loss)
+        loss = flow_loss + recon_loss
 
         LOSS = {
-            'LOSS': flow_loss + recon_loss,
+            'LOSS': loss,
             'FLOW': flow_loss,
             'RECON': recon_loss
         }
 
         RET = {
             'PRED': recon,
-            'GT': data['dimg'][:, t0],
+            'GT': gt,
             'FRAME': t0,
-            'TOKEN': uni_embeds
+            'TOKEN': uni_embeds,
+            'IND': data['ind'],
+            'TAG': data['tag']
         }
 
         return RET, LOSS
 
+
+class TeacherTrainer(ModelTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(name='WiHAR', 
+        model=ViTTeacher(num_slots=16, num_heads=8), 
+        pred_terms = ('GT', 'PRED'), 
+        lr=1.e-4, 
+        *args, **kwargs)
 
 
 

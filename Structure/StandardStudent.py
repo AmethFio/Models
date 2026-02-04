@@ -72,8 +72,9 @@ class StudentTrainer(BasicTrainer):
 
         self.alpha = alpha
         self.recon_lossfunc = recon_lossfunc
+        self.img_loss = nn.MSELoss(reduction='sum')
 
-        self.loss_terms = ('LOSS', 'LATENT', 'MU', 'LOGVAR', 'FEATURE', 'IMG', 'CTR', 'DPT')
+        self.loss_terms = ('LOSS', 'MU', 'LOGVAR', 'FEATURE', 'IMG', 'CTR', 'DPT')
         self.pred_terms = ('C_GT', 'R_GT',
                            'TR_PRED', 'R_PRED',
                            'TC_PRED', 'SC_PRED',
@@ -104,15 +105,15 @@ class StudentTrainer(BasicTrainer):
         self.training_phases = {'main': TrainingPhase(name = 'main',
                                                         train_module = ['csien'],
                                                         eval_module = ['imgen', 'rimgde', 'cimgde', 'ctrde'],
+                                                        lossfunc=self.calculate_loss,
                                                         verbose=False
                                                         )}
         
-        self.wasserstein_weight = 0.1
         self.latent_weight = 1.e3
-        self.img_weight = 1.
-        self.center_weight = 1.
-        self.depth_weight = 1.
-        self.feature_weight = 1.
+        self.img_weight = 3.e-3
+        self.center_weight = 100.
+        self.depth_weight = 100.
+        self.feature_weight = 2.
 
         # self.wasserstein_loss = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)  # Sinkhorn approx
 
@@ -135,17 +136,16 @@ class StudentTrainer(BasicTrainer):
         
         # 3-level loss
         feature_loss = self.feature_loss(ret['s_fea'], ret['t_fea'])
-        latent_loss = self.wasserstein_loss(ret['t_z'], ret['s_z'])
+
         mu_loss, logvar_loss = self.kd_loss(ret['s_mu'], ret['s_logvar'], ret['t_mu'], ret['t_logvar'])
         center_loss = self.recon_lossfunc(ret['s_center'], torch.squeeze(data['center']))
         depth_loss = self.recon_lossfunc(ret['s_depth'], torch.squeeze(data['depth']))
-        image_loss = self.recon_lossfunc(ret['s_rimage'], rimg)
+        image_loss = self.img_loss(ret['s_rimage'], rimg) / ret['s_rimage'].shape[0]
         
         # if self.with_cimg_loss:
         #     image_loss += self.recon_lossfunc(ret['s_cimage'], cimg)
         
         loss = feature_loss * self.feature_weight +\
-            latent_loss * self.wasserstein_weight +\
                 mu_loss * self.latent_weight * self.alpha+\
                     logvar_loss * self.latent_weight * (1 - self.alpha)+\
             image_loss * self.img_weight +\
@@ -153,7 +153,6 @@ class StudentTrainer(BasicTrainer):
             depth_loss * self.depth_weight
         
         TMP_LOSS = {'LOSS': loss,
-                    'LATENT': latent_loss * self.wasserstein_weight,
                     'MU': mu_loss * self.latent_weight,
                     'LOGVAR': logvar_loss * self.latent_weight,
                     'FEATURE': feature_loss * self.feature_weight,
