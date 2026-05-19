@@ -228,6 +228,36 @@ class CSIEncoderHPool(nn.Module):
 
         return z, mu, logvar, out
 
+
+class CenterDecoder(nn.Module):
+    name = 'ctrde'
+
+    def __init__(self):
+        super(CenterDecoder, self).__init__(depth=False)
+        self.feature_length = 1536
+        self.depth = depth
+
+        self.fc = nn.Sequential(
+            nn.Linear(self.feature_length, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2 if not self.depth else 3),
+            nn.Sigmoid()
+        )
+
+        init.xavier_normal_(self.fc[-2].weight)
+
+    def __str__(self):
+        return f"CTRDE{version}"
+
+    def forward(self, x):
+        out = self.fc(x.view(-1, self.feature_length))
+        if not self.depth:
+            return out
+        else:
+            center = out[..., :2]
+            depth = out[..., -1]
+            return center, depth
+
 class Student(nn.Module):
 
     def __init__(self, device=None, teacher=None, teacher_training=False):
@@ -236,6 +266,8 @@ class Student(nn.Module):
         # Named children
         self.imgen = ImageEncoder(latent_dim=128)
         self.imgde = ImageDecoder(latent_dim=128, teacher_training=teacher_training)
+        self.cimgde = ImageDecoder(latent_dim=128, teacher_training=teacher_training)
+        self.ctrde = CenterDecoder(teacher_training=teacher_training)
         self.csien = CSIEncoderHPool(latent_dim=128)
 
         if device is not None:
@@ -253,7 +285,9 @@ class Student(nn.Module):
         self.alpha = 0.8
         self.latent_weight = 0.1
         self.rimg_weight = 1.e-5
+        self.cimg_weight = 1.e-5
         self.feature_weight = 10
+        self.center_weight = 1.
 
     def kd_loss(self, mu_s, logvar_s, mu_t, logvar_t):
         mu_loss = self.latent_loss(mu_s, mu_t) / mu_s.shape[0]
@@ -265,30 +299,44 @@ class Student(nn.Module):
         csi, pd, rimg = data['csi'], data['pd'], data['shape']
         s_z, s_mu, s_logvar, s_fea = self.csien(csi=csi, pd=pd)
         s_rimage = self.imgde(s_z)
+        s_cimage = self.cimgde(s_z)
+        s_center = self.ctrde(s_fea)
 
         with torch.no_grad():
             t_z, t_mu, t_logvar, t_fea = self.imgen(rimg)
             t_rimage = self.imgde(t_z)
+            t_cimage = self.cimgde(t_z)
+            t_center = self.ctrde(t_fea)
 
         mu_loss, logvar_loss = self.kd_loss(s_mu, s_logvar, t_mu, t_logvar)
         mu_loss, logvar_loss = self.alpha * mu_loss * self.latent_weight, (1 - self.alpha) * logvar_loss * self.latent_weight
         feature_loss = self.feature_loss(s_fea, t_fea) * self.feature_weight
         image_loss = self.img_loss(s_rimage, rimg)
+        cimage_loss = self.img_loss(s_cimage, cimg) * self.cimg_weight
+        center_loss = self.img_loss(s_center, data['ctr']) * self.center_weight
 
         ret = {
         'S_LAT'     : s_z,
         'S_PRED': s_rimage,
         'T_LAT'     : t_z,
         'T_PRED': t_rimage,
-        'GT': rimg
+        'GT': rimg,
+        'S_CIMG': s_cimage,
+        'T_CIMG': t_cimage,
+        'GT_CIMG': data['cimg'],
+        'S_CTR': s_center,
+        'T_CTR': t_center
+        'GT_CTR': data['ctr']
         }
 
         loss = {
-            'LOSS': mu_loss + logvar_loss + feature_loss + image_loss,
+            'LOSS': mu_loss + logvar_loss + feature_loss + image_loss + cimage_loss + center_loss,
             'MU': mu_loss,
             'LOGVAR': logvar_loss,
             'FEA': feature_loss,
-            'IMG': image_loss
+            'IMG': image_loss,
+            'CIMG': cimage_loss,
+            'CTR': center_loss
         }
 
         return ret, loss
@@ -302,14 +350,19 @@ class Teacher(nn.Module):
         # Named children
         self.imgen = ImageEncoder(latent_dim=128)
         self.imgde = ImageDecoder(latent_dim=128)
+        self.cimgde = ImageDecoder(latent_dim=128)
+        self.ctrde = CenterDecoder()
 
         if device is not None:
             self.to(device)
 
         self.img_loss = nn.BCEWithLogitsLoss(reduction='sum')
+        self.center_loss = nn.MSELoss()
 
         self.beta = 0.5
         self.img_weight = 1.
+        self.cimg_weight = 1.
+        self.center_weight = 1.
 
     def kl_loss(self, mu, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -319,22 +372,32 @@ class Teacher(nn.Module):
         rimg = data['shape']
         z, mu, logvar, feature = self.imgen(rimg)
         r_recon = self.imgde(z)
+        cimg = self.cimgde(z)
+        center = self.ctrde(z)
 
         kl_loss = self.kl_loss(mu, logvar) * self.beta
         img_loss = self.img_loss(r_recon, rimg) / r_recon.shape[0] * self.img_weight
+        cimg_loss = self.img_loss(cimg, data['cimg']) / cimg.shape[0] * self.cimg_weight
+        center_loss = self.center_loss(center, data['ctr']) * self.center_weight
 
-        vae_loss = kl_loss + img_loss
+        vae_loss = kl_loss + img_loss + cimg_loss + center_loss
 
         ret = {
         'LAT'      : z,
         'IMG': r_recon,
         'GT': rimg,
+        'GT_CTR': data['ctr'],
+        'CTR': center,
+        'CIMG': cimg
+        'GT_CIMG': data['cimg']
                 }
 
         loss = {
             'LOSS': vae_loss,
             'KL': kl_loss,
-            'IMG': img_loss
+            'IMG': img_loss,
+            'CIMG': cimg_loss,
+            'CTR': center_loss
         }
 
         return ret, loss
@@ -344,8 +407,12 @@ class StudentTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):
         super(StudentTrainer, self).__init__(model=Student(), train_module=['csien'], *args, **kwargs)
         self.pred_terms = ('GT', 'T_PRED', 'S_PRED')
+        self.pred_terms_ctr = ('GT_CTR', 'T_CTR', 'S_CTR')
+        self.pred_terms_cimg = ('GT_CIMG', 'T_CIMG', 'S_CIMG')
 
 class TeacherTrainer(ModelTrainer):
     def __init__(self, *args, **kwargs):
         super(TeacherTrainer, self).__init__(model=Teacher(), *args, **kwargs)
         self.pred_terms = ('GT', 'IMG')
+        self.pred_terms_ctr = ('GT_CTR', 'CTR')
+        self.pred_terms_cimg = ('GT_CIMG', 'CIMG')

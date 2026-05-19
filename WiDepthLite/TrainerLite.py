@@ -137,6 +137,10 @@ class ModelTrainer:
                 self.plot_train_valid_loss()
                 for validator in self.validator:
                     filename, fig = validator.loss_tracker.plot_preds(self.pred_terms)
+                    if self.pred_terms_cimg is not None:
+                        filename, fig = validator.loss_tracker.plot_preds(self.pred_terms_cimg)
+                    if self.pred_terms_ctr is not None:
+                        filename, fig = validator.loss_tracker.plot_ctr(self.pred_terms_ctr)
         
         if save_model:
             self.save(mode='best')
@@ -157,6 +161,10 @@ class ModelTrainer:
     def plot_test(self):
         # Change the way of plotting preds specifically.
         filename, out_fig = self.tester.loss_tracker.plot_preds(self.pred_terms)
+        if self.pred_terms_cimg is not None:
+            filename, fig = self.tester.loss_tracker.plot_preds(self.pred_terms_cimg)
+        if self.pred_terms_ctr is not None:
+            filename, fig = self.tester.loss_tracker.plot_ctr(self.pred_terms_ctr)
         filename, out_fig = self.tester.loss_tracker.plot_cdf()
 
 

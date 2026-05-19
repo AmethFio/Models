@@ -215,6 +215,7 @@ class LossPlotter:
 class PredPlotter:
     def __init__(self):
         self.plot_settings = PlotSettings()
+        self.centercolor = ['blue', 'orange', 'green']
 
     def plot_images(self, preds, inds, tags=None, title=None):
         rows = len(preds) - 2
@@ -239,6 +240,31 @@ class PredPlotter:
 
             subfig.colorbar(img, ax=axes, shrink=0.8)
 
+        plt.show()
+
+        return fig
+
+    def plot_center(self, preds, inds, tags=None, title=None):
+        fig, axes = self.plot_settings(title)
+        axes = fig.subplots(nrows=2, ncols=4)
+        axes = axes.flatten()
+
+        for j, (ax, ind) in enumerate(zip(axes, inds)):
+            ax.set_xlim([0, 226])
+            ax.set_ylim([0, 128])
+            ax.set_title(f"{'-'.join(map(str, map(int, tags[i])))}")
+
+            for ctr in preds.values():
+                x, y = ctr[j]
+                x = int(x * 226)
+                y = int(y * 128)
+                ax.scatter(x, y, c=self.centercolor[j % len(self.centercolor)], marker=(5, 1), alpha=0.5, linewidths=5, label=ctr)
+             
+            ax.axis('off')
+            ax.add_patch(Rectangle((0, 0), 226, 128, facecolor="#F0FFFF",
+                                        transform=ax.transAxes, zorder=-1))
+
+        axes[0].legend()
         plt.show()
 
         return fig
@@ -327,6 +353,26 @@ class LossTracker:
 
         inds, tags = self.index_generator(preds['IND'], preds['TAG'])
         out_fig = self.pred_plotter.plot_images(preds, inds, tags, title)
+
+        if show:
+            plt.show()
+        return filename, out_fig
+
+    def plot_ctr(self, pred_terms='all', show=True):
+        preds = self.pred_buffer.epoch_log
+        if pred_terms == 'all':
+            pred_terms = ['GT_CTR', 'T_CTR', 'S_CTR']
+
+        preds = {key: value for key, value in preds.items() if key in pred_terms}
+        preds['IND'] = self.pred_buffer.epoch_log.get('IND', None)
+        preds['TAG'] = self.pred_buffer.epoch_log.get('TAG', None)
+        preds = self.to_cpu(preds)
+
+        title = f"{self.name}_CENTER@ep{self.current_epoch}"
+        filename = f"{title}.jpg"
+        
+        inds, tags = self.index_generator(preds['IND'], preds['TAG'])
+        out_fig = self.pred_plotter.plot_center(preds, inds, tags, title)
 
         if show:
             plt.show()

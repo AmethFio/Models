@@ -41,6 +41,94 @@ class DepthMask:
         return images
 
 
+class Crop:
+    def __init__(self):
+        self.bbx = None
+        self.ctr = None
+        self.cimg = None
+    
+    def __call__(self, images, min_area=0, cvt_bbx=True, show=False):
+        """
+        Calculate cropped images, bounding boxes, center coordinates, depth.\n
+        :param min_area: 0
+        :param show: whether show images with bounding boxes
+        :return: bbx, center, depth, c_img
+        """
+        self.bbx = np.zeros((len(images), 4), dtype=float)
+        self.ctr = np.zeros((len(images), 3), dtype=float)
+        self.cimg = np.zeros((len(images), 1, 128, 128), dtype=np.uint8)
+        
+        # Handle different data types
+        if images.dtype == np.float32:
+            img_normalized = (images * 255).astype(np.uint8)
+        elif images.dtype == np.uint16:
+            img_normalized = (images / 256).astype(np.uint8)
+        else:
+            raise ValueError(f"Only float32 and uint16 are supported, got {img.dtype}")
+
+        h_, w_ = img_normalized.shape[1], img_normalized.shape[2]
+
+        for i in tqdm(range(len(images))):
+            img = np.squeeze(img_normalized[i])
+
+            # Threshold the normalized image
+            (T, timg) = cv2.threshold(img, 1, 255, cv2.THRESH_BINARY)
+            contours, hierarchy = cv2.findContours(timg, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+            if len(contours) != 0:
+                contour = max(contours, key=lambda x: cv2.contourArea(x))
+                area = cv2.contourArea(contour)
+
+                if area < min_area:
+                    # print(area)
+                    pass
+
+                else:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    w = 128 if w > 128 else w
+                    
+                    cropped = img[y:y + h, x:x + w]
+
+                    self.bbx[i] = x / 226, y / 128, w / 226, h / 128
+                    if cvt_bbx:
+                        self.bbx[i, 2] += self.bbx[i, 0]
+                        self.bbx[i, 3] += self.bbx[i, 1]
+                        
+                    # (x, y, d)
+                    self.ctr[i, 0] = (x + w / 2) / 226
+                    self.ctr[i, 1] = (y + h / 2) / 128
+                    
+                    image = np.pad(cropped, pad_width=((64 - h // 2,
+                                                        64 - h + h //2), 
+                                                       (64 - w // 2,
+                                                       64 - w + w // 2)),
+                                   mode='constant',
+                                   constant_values = 0
+                                   )
+
+                    self.cimg[i, 0] = image
+
+                    if show:
+                        img = cv2.rectangle(cv2.cvtColor(img, cv2.COLOR_GRAY2BGR),
+                                            (x, y),
+                                            (x + w, y + h),
+                                            (0, 255, 0), 1)
+                        cv2.namedWindow('Raw Image', cv2.WINDOW_AUTOSIZE)
+                        cv2.imshow('Raw Image', img)
+                        key = cv2.waitKey(33) & 0xFF
+                        if key == ord('q'):
+                            break
+        print("Done")
+
+    def save(self, save_path):
+        
+        for item in ('cimg', 'bbx', 'ctr'):
+            if getattr(self, item) is not None:
+                print(f'Saving {item}...', end='')
+                np.save(os.path.join(save_path), getattr(self, item))
+                print('Done')
+
+
 class ImageLoader:
     # Camera time should have been calibrated
 
